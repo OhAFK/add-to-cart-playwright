@@ -1,7 +1,7 @@
 {
   "name": "farmers-monitor",
   "version": "1.0.0",
-  "description": "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222 --user-data-dir=\"/tmp/chrome_debug_profile\"",
+  "description": "Playwright product availability monitor using a persistent Chrome profile",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

@@ -3,16 +3,6 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const sites = require('./sites'); // Import your separate configuration file
 
-// Refresh interval set to 1–3 seconds (1000ms - 3000ms)
-const MIN_INTERVAL = 1000;
-const MAX_INTERVAL = 3000;
-
-// Configurable delay before navigating to cart/checkout after clicking "Add to Cart"
-const CART_DELAY_MS = 2000;
-
-// Corrected math calculation for interval range
-const getRandomInterval = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
 // Helper function to record success to a file
 function logSuccessToFile(workerId, name, url) {
   const successRecord = {
@@ -50,8 +40,14 @@ async function monitorProduct({
   name,
   workerId,
   addToCartSelector,
-  checkoutSelector,
-  manualCartUrl
+  addToCartConfirmationText,
+  manualCartUrl,
+  refreshIntervalMs,
+  cartDelayMs,
+  addToCartConfirmationTimeoutMs,
+  addToCartWaitTimeoutMs,
+  navigationTimeoutMs,
+  clickTimeoutMs
 }) {
   // Reuse the existing browser context to open a new tab for each worker
   const page = await context.newPage();
@@ -63,95 +59,99 @@ async function monitorProduct({
       attemptCount++;
       console.log(`[Worker #${workerId} (${name}) | Attempt #${attemptCount}] Checking: ${url}`);
       
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
 
-      let addToCartBtn = await page.$(addToCartSelector);
+      const addToCartBtn = page.locator(addToCartSelector).filter({ visible: true }).first();
+      let addToCartButtonFound = false;
+      try {
+        await addToCartBtn.waitFor({ state: 'visible', timeout: addToCartWaitTimeoutMs });
+        addToCartButtonFound = true;
+      } catch (err) {
+        if (err.name !== 'TimeoutError') {
+          throw err;
+        }
+        console.log(`[Worker #${workerId} (${name})][NOT FOUND] Add-to-cart button is not visible.`);
+      }
 
-      if (addToCartBtn) {
-        const isDisabled = await addToCartBtn.isDisabled();
-        const buttonText = await addToCartBtn.textContent();
+      if (addToCartButtonFound) {
+        const disabledAttribute = await addToCartBtn.getAttribute('disabled');
+        const isDisabled = disabledAttribute !== null || !(await addToCartBtn.isEnabled());
+        const buttonText = (await addToCartBtn.textContent())?.trim() ?? '';
         const className = (await addToCartBtn.getAttribute('class')) || '';
 
         if (!isDisabled && !buttonText.toLowerCase().includes('sold out') && !className.includes('disabled')) {
-          console.log(`[Worker #${workerId} (${name})][SUCCESS] Item available! Clicking add to cart...`);
-          
-          // --- MESSAGING SUCCESS TO CONSOLE ---
-          console.log(`\n========================================`);
-          console.log(`🎉 SUCCESSFUL ITEM SECURED!`);
-          console.log(`- Worker ID: #${workerId}`);
-          console.log(`- Product Name: ${name}`);
-          console.log(`- Product URL: ${url}`);
-          console.log(`========================================\n`);
+        console.log(`[Worker #${workerId} (${name})][SUCCESS] Item available! Clicking add to cart...`);
 
-          // --- SAVE SUCCESS TO FILE ---
-          logSuccessToFile(workerId, name, url);
+        console.log(`\n========================================`);
+        console.log(`🎉 SUCCESSFUL ITEM SECURED!`);
+        console.log(`- Worker ID: #${workerId}`);
+        console.log(`- Product Name: ${name}`);
+        console.log(`- Product URL: ${url}`);
+        console.log(`========================================\n`);
 
-          await addToCartBtn.click();
-          
-          // --- WAITING CONFIGURABLE TIME BEFORE CART NAVIGATION ---
-          if (CART_DELAY_MS > 0) {
-            console.log(`[Worker #${workerId}] Waiting ${CART_DELAY_MS}ms before proceeding to cart...`);
-            await page.waitForTimeout(CART_DELAY_MS);
-          }
-          // --------------------------------------------------------
+        const clickStartedAt = Date.now();
+        await addToCartBtn.click({ timeout: clickTimeoutMs });
+        console.log(`[Worker #${workerId}] Add-to-cart click completed in ${Date.now() - clickStartedAt}ms.`);
 
-          // --- UPDATED CHECKOUT LOGIC ---
-          if (manualCartUrl) {
-            console.log(`[Worker #${workerId}] Navigating directly to manual cart URL: ${manualCartUrl}`);
-            await page.goto(manualCartUrl, { waitUntil: 'domcontentloaded' });
-          } else if (checkoutSelector) {
-            try {
-              console.log(`[Worker #${workerId}] Waiting for checkout button...`);
-              const checkoutLink = await page.waitForSelector(checkoutSelector, { timeout: 5000 });
-              if (checkoutLink) {
-                console.log(`[Worker #${workerId}] Clicking checkout element...`);
-                await checkoutLink.click();
-              }
-            } catch (checkoutErr) {
-              console.log(`[Worker #${workerId}] Checkout element not found. Leaving on page.`);
-            }
-          }
-          // ------------------------------
-
-          console.log(`[Worker #${workerId}] SUCCESS! Item added. Playing alarm...`);
-
-          // Fixed audio syntaxes (restored missing '*' arithmetic operators)
-          await page.evaluate(() => {
-            try {
-              const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-              for (let i = 0; i < 3; i++) {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.type = "sine";
-                osc.frequency.value = 880;
-                gain.gain.setValueAtTime(0.5, audioCtx.currentTime + (i * 0.2));
-                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + (i * 0.2) + 0.15);
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.start(audioCtx.currentTime + (i * 0.2));
-                osc.stop(audioCtx.currentTime + (i * 0.2) + 0.15);
-              }
-            } catch (e) {
-              console.warn("Audio error:", e);
-            }
+        if (addToCartConfirmationText) {
+          console.log(`[Worker #${workerId}] Waiting for add-to-cart confirmation: "${addToCartConfirmationText}"`);
+          await page.getByText(addToCartConfirmationText, { exact: false }).waitFor({
+            state: 'visible',
+            timeout: addToCartConfirmationTimeoutMs
           });
-
-          console.log(`[Worker #${workerId}] Item secured! Pausing this worker.`);
-          await new Promise(() => {}); // Keep tab open
-        } else {
-          console.log(`[Worker #${workerId} (${name})][SOLD OUT / DISABLED]`);
+          console.log(`[Worker #${workerId}] Add-to-cart confirmation received.`);
+        } else if (cartDelayMs > 0) {
+          console.log(`[Worker #${workerId}] Waiting ${cartDelayMs}ms before proceeding to cart...`);
+          await page.waitForTimeout(cartDelayMs);
         }
-      } else {
-        console.log(`[Worker #${workerId} (${name})][SOLD OUT] Add to cart button not found`);
+
+        logSuccessToFile(workerId, name, url);
+
+        console.log(`[Worker #${workerId}] SUCCESS! Item added. Playing alarm...`);
+
+        await page.evaluate(async () => {
+          try {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            await audioCtx.resume();
+            for (let i = 0; i < 3; i++) {
+              const osc = audioCtx.createOscillator();
+              const gain = audioCtx.createGain();
+              osc.type = "sine";
+              osc.frequency.value = 880;
+              gain.gain.setValueAtTime(0.5, audioCtx.currentTime + (i * 0.2));
+              gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + (i * 0.2) + 0.15);
+              osc.connect(gain);
+              gain.connect(audioCtx.destination);
+              osc.start(audioCtx.currentTime + (i * 0.2));
+              osc.stop(audioCtx.currentTime + (i * 0.2) + 0.15);
+            }
+            await new Promise(resolve => setTimeout(resolve, 800));
+            await audioCtx.close();
+          } catch (e) {
+            console.warn("Audio error:", e);
+          }
+        });
+
+        console.log(`[Worker #${workerId}] Navigating directly to manual cart URL: ${manualCartUrl}`);
+        await page.goto(manualCartUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
+
+        console.log(`[Worker #${workerId}] Item secured! Pausing this worker.`);
+        await new Promise(() => {});
+        } else {
+          console.log(
+            `[Worker #${workerId} (${name})][NOT CLICKED] ` +
+            `disabled attribute: ${disabledAttribute === null ? 'absent' : JSON.stringify(disabledAttribute)}; ` +
+            `enabled: ${!isDisabled}; text: "${buttonText}"`
+          );
+        }
       }
 
     } catch (err) {
       console.error(`[Worker #${workerId} (${name})] Error:`, err.message);
     }
 
-    const delay = getRandomInterval(MIN_INTERVAL, MAX_INTERVAL);
-    console.log(`[Worker #${workerId}] Waiting ${(delay / 1000).toFixed(1)}s before refresh...`);
-    await page.waitForTimeout(delay);
+    console.log(`[Worker #${workerId}] Waiting ${(refreshIntervalMs / 1000).toFixed(1)}s before refresh...`);
+    await page.waitForTimeout(refreshIntervalMs);
   }
 }
 

@@ -1,24 +1,72 @@
 // sites.js
 module.exports = [
   {
+    name: "test item",
+    url: "https://www.farmers.co.nz/home/christmas/room-decorations/christmas-shop-led-ceramic-townhouse-medium-blush-7030428",
+    addToCartSelector: 'button[data-testing-id="addToCartButton"]',
+    addToCartConfirmationText:
+      "You have added the following product to your Farmers shopping cart.",
+    manualCartUrl: "https://www.farmers.co.nz/cart",
+    refreshIntervalMs: 5000,
+    cartDelayMs: 2000,
+    addToCartConfirmationTimeoutMs: 15000,
+    addToCartWaitTimeoutMs: 5000,
+    navigationTimeoutMs: 30000,
+    clickTimeoutMs: 10000,
+  },
+  {
+    name: "test item2",
+    url: "https://www.farmers.co.nz/home/home-decor/candles-home-fragrance/home-fusion-sea-salt-bergamot-candle-140g-7032943",
+    addToCartSelector: 'button[data-testing-id="addToCartButton"]',
+    addToCartConfirmationText:
+      "You have added the following product to your Farmers shopping cart.",
+    manualCartUrl: "https://www.farmers.co.nz/cart",
+    refreshIntervalMs: 5000,
+    cartDelayMs: 2000,
+    addToCartConfirmationTimeoutMs: 15000,
+    addToCartWaitTimeoutMs: 5000,
+    navigationTimeoutMs: 30000,
+    clickTimeoutMs: 10000,
+  },
+  {
     name: "Farmers - 30th bundle",
     url: "https://www.farmers.co.nz/toys/games-cards-puzzles/pokemon-trading-card-30th-booster-bundle-7064593",
     addToCartSelector: 'button[data-testing-id="addToCartButton"]',
-    checkoutSelector: 'a.btn.btn-primary[href*="/cart"]',
-    manualCartUrl: "https://www.farmers.co.nz/cart"
+    addToCartConfirmationText:
+      "You have added the following product to your Farmers shopping cart.",
+    manualCartUrl: "https://www.farmers.co.nz/cart",
+    refreshIntervalMs: 5000,
+    cartDelayMs: 2000,
+    addToCartConfirmationTimeoutMs: 15000,
+    addToCartWaitTimeoutMs: 5000,
+    navigationTimeoutMs: 30000,
+    clickTimeoutMs: 10000,
   },
   {
     name: "Farmers - 30th tin",
     url: "https://www.farmers.co.nz/toys/games-cards-puzzles/pokemon-trading-card-30th-mini-tin-assorrted-7064592",
     addToCartSelector: 'button[data-testing-id="addToCartButton"]',
-    checkoutSelector: 'a.btn.btn-primary[href*="/cart"]',
-    manualCartUrl: "https://www.farmers.co.nz/cart"
+    addToCartConfirmationText:
+      "You have added the following product to your Farmers shopping cart.",
+    manualCartUrl: "https://www.farmers.co.nz/cart",
+    refreshIntervalMs: 5000,
+    cartDelayMs: 2000,
+    addToCartConfirmationTimeoutMs: 15000,
+    addToCartWaitTimeoutMs: 5000,
+    navigationTimeoutMs: 30000,
+    clickTimeoutMs: 10000,
   },
-  // {
-  //   name: "JB Hi-Fi - Apple TV 4K 64GB",
-  //   url: "https://www.jbhifi.co.nz/products/apple-tv-4k-wi-fi-64gb-2022",
-  //   addToCartSelector: 'button[data-testid="add-to-cart-button"]',
-  //   checkoutSelector: null, // Leaves worker on page after adding to cart
-  //   manualCartUrl: "https://www.jbhifi.co.nz/cart"
-  // }
+  {
+    name: "JB Hi-Fi - Apple TV 4K 64GB",
+    url: "https://www.jbhifi.co.nz/products/apple-tv-4k-wi-fi-64gb-2022",
+    addToCartSelector: 'button[data-testid="add-to-cart-button"]',
+    addToCartConfirmationText: "Item added to your cart!",
+    manualCartUrl: "https://www.jbhifi.co.nz/cart",
+    refreshIntervalMs: 5000,
+    cartDelayMs: 2000,
+    addToCartConfirmationTimeoutMs: 15000,
+    addToCartWaitTimeoutMs: 5000,
+    navigationTimeoutMs: 30000,
+    clickTimeoutMs: 10000,
+  },
 ];
