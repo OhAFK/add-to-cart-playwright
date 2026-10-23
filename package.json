@@ -4,6 +4,7 @@
   "description": "Playwright product availability monitor using a persistent Chrome profile",
   "main": "index.js",
   "scripts": {
+    "jbhifi-cart": "node jbhifi-cart-script.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

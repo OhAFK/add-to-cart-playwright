@@ -57,6 +57,9 @@ async function monitorProduct({
   name,
   workerId,
   addToCartSelector,
+  addToCartMethod = "click",
+  sku,
+  quantity = 1,
   addToCartConfirmationText,
   manualCartUrl,
   refreshIntervalMs = 5000,
@@ -142,7 +145,11 @@ async function monitorProduct({
           !className.includes("disabled")
         ) {
           console.log(
-            `[Worker #${workerId} (${name})][SUCCESS] Item available! Clicking add to cart...`,
+            `[Worker #${workerId} (${name})][SUCCESS] Item available! ${
+              addToCartMethod === "farmers-post"
+                ? "Sending add-to-cart POST..."
+                : "Clicking add to cart..."
+            }`,
           );
 
           console.log(`\n========================================`);
@@ -152,13 +159,82 @@ async function monitorProduct({
           console.log(`- Product URL: ${url}`);
           console.log(`========================================\n`);
 
-          const clickStartedAt = Date.now();
-          await addToCartBtn.click({ timeout: currentClickTimeout });
-          console.log(
-            `[Worker #${workerId}] Add-to-cart click completed in ${Date.now() - clickStartedAt}ms.`,
-          );
+          if (addToCartMethod === "farmers-post") {
+            if (!sku) {
+              throw new Error("A SKU is required for the Farmers add-to-cart POST.");
+            }
 
-          if (addToCartConfirmationText) {
+            const postStartedAt = Date.now();
+            const result = await page.evaluate(async ({ sku, quantity }) => {
+              const endpoint =
+                "/INTERSHOP/web/WFS/Farmers-Shop-Site/en_NZ/-/NZD/ViewExpressShop-AddProduct";
+              const body = new URLSearchParams({
+                SKU: sku,
+                [`Quantity_${sku}`]: String(quantity),
+                addToCartBehavior: "expresscart",
+              });
+              const response = await fetch(endpoint, {
+                method: "POST",
+                credentials: "include",
+                headers: {
+                  accept: "*/*",
+                  "content-type":
+                    "application/x-www-form-urlencoded; charset=UTF-8",
+                  "x-requested-with": "XMLHttpRequest",
+                },
+                body,
+              });
+              const text = await response.text();
+              const doc = new DOMParser().parseFromString(text, "text/html");
+              const modal = doc.querySelector(
+                "#add-to-cart-confirmation .modal-body",
+              );
+              const successBox = modal?.querySelector(".alert-success-alt");
+              const errorMessage =
+                modal?.querySelector('p[style*="B90618"]') ||
+                doc.querySelector("#miniCart .alert-danger li");
+              const pushedSku = new RegExp(
+                '"event":\\s*"addToCart"[\\s\\S]*?"id":\\s*"' + sku + '"',
+              ).test(text);
+              const count = doc.querySelector("#mini-cart-count");
+
+              return {
+                httpStatus: response.status,
+                ok: response.ok,
+                status:
+                  successBox || pushedSku
+                    ? "ADDED"
+                    : errorMessage
+                      ? "SOLD OUT"
+                      : "UNKNOWN",
+                message:
+                  successBox?.textContent.trim() ||
+                  errorMessage?.textContent.trim() ||
+                  text.slice(0, 300),
+                cartCount: count?.textContent.trim() || "?",
+              };
+            }, { sku, quantity });
+
+            console.log(
+              `[Worker #${workerId}] Farmers add-to-cart POST completed in ${Date.now() - postStartedAt}ms (HTTP ${result.httpStatus}).`,
+            );
+            if (!result.ok || result.status !== "ADDED") {
+              throw new Error(
+                `Farmers POST did not confirm add (${result.status}, HTTP ${result.httpStatus}): ${result.message}`,
+              );
+            }
+            console.log(
+              `[Worker #${workerId}] Farmers POST confirmed add; cart count: ${result.cartCount}.`,
+            );
+          } else {
+            const clickStartedAt = Date.now();
+            await addToCartBtn.click({ timeout: currentClickTimeout });
+            console.log(
+              `[Worker #${workerId}] Add-to-cart click completed in ${Date.now() - clickStartedAt}ms.`,
+            );
+          }
+
+          if (addToCartMethod !== "farmers-post" && addToCartConfirmationText) {
             console.log(
               `[Worker #${workerId}] Waiting for add-to-cart confirmation: "${addToCartConfirmationText}"`,
             );

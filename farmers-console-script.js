@@ -4,7 +4,11 @@
 (() => {
   const SKUS = ["7064593", "7064592"]; // Add your multiple SKUs here
   const QTY = 1;
-  const INTERVAL = 2000; // 2000ms = 2 seconds between attempts
+
+  // Randomization settings (in milliseconds)
+  const MIN_INTERVAL = 1300; // Minimum delay (1.5 seconds)
+  const MAX_INTERVAL = 1800; // Maximum delay (3.0 seconds)
+
   const MAX_TRIES = 200; // 0 = run until stopped
   const STOP_ON_ADD = true; // stop looping for a SKU once it's in the cart
 
@@ -14,6 +18,14 @@
   let tries = 0;
   let timer = null;
   const ts = () => new Date().toLocaleTimeString();
+
+  // Helper to get a random delay between MIN and MAX
+  function getRandomInterval() {
+    return (
+      Math.floor(Math.random() * (MAX_INTERVAL - MIN_INTERVAL + 1)) +
+      MIN_INTERVAL
+    );
+  }
 
   function classify(text, sku) {
     const doc = new DOMParser().parseFromString(text, "text/html");
@@ -45,10 +57,9 @@
 
   async function attempt() {
     tries++;
-    let allAdded = true;
 
-    for (let i = 0; i < SKUS.length; i++) {
-      const sku = SKUS[i];
+    // Fire all SKU fetch requests in parallel using Promise.all
+    const promises = SKUS.map(async (sku) => {
       const body =
         "SKU=" +
         sku +
@@ -74,66 +85,83 @@
         const text = await res.text();
         const result = classify(text, sku);
 
-        if (result.status === "ADDED") {
-          console.log(
-            "%c[" +
-              ts() +
-              "] #" +
-              tries +
-              " SKU " +
-              sku +
-              " [ADDED TO CART] cart: " +
-              result.cartCount,
-            "color:#00b5b5;font-weight:bold",
-          );
-          if (STOP_ON_ADD) {
-            // Remove successfully added SKU from the array so we don't keep requesting it
-            SKUS.splice(i, 1);
-            i--;
-          }
-        } else if (result.status === "SOLD OUT") {
-          allAdded = false;
-          console.log(
-            "[" +
-              ts() +
-              "] #" +
-              tries +
-              " SKU " +
-              sku +
-              " [SOLD OUT] " +
-              result.msg,
-          );
-        } else {
-          allAdded = false;
-          console.warn(
-            "[" +
-              ts() +
-              "] #" +
-              tries +
-              " SKU " +
-              sku +
-              " [UNKNOWN] (HTTP " +
-              res.status +
-              ")",
-            result.msg,
-          );
-        }
+        return { sku, resStatus: res.status, result };
       } catch (err) {
-        allAdded = false;
+        return { sku, error: err.message };
+      }
+    });
+
+    const outcomes = await Promise.all(promises);
+
+    // Process outcomes and manage successfully added SKUs
+    for (const outcome of outcomes) {
+      const { sku, resStatus, result, error } = outcome;
+      const skuIndex = SKUS.indexOf(sku);
+
+      if (error) {
         console.error(
           "[" + ts() + "] #" + tries + " SKU " + sku + " [REQUEST FAILED]",
-          err.message,
+          error,
+        );
+        continue;
+      }
+
+      if (result.status === "ADDED") {
+        console.log(
+          "%c[" +
+            ts() +
+            "] #" +
+            tries +
+            " SKU " +
+            sku +
+            " [ADDED TO CART] cart: " +
+            result.cartCount,
+          "color:#00b5b5;font-weight:bold",
+        );
+        if (STOP_ON_ADD && skuIndex > -1) {
+          SKUS.splice(skuIndex, 1);
+        }
+      } else if (result.status === "SOLD OUT") {
+        console.log(
+          "[" +
+            ts() +
+            "] #" +
+            tries +
+            " SKU " +
+            sku +
+            " [SOLD OUT] " +
+            result.msg,
+        );
+      } else {
+        console.warn(
+          "[" +
+            ts() +
+            "] #" +
+            tries +
+            " SKU " +
+            sku +
+            " [UNKNOWN] (HTTP " +
+            resStatus +
+            ")",
+          result.msg,
         );
       }
     }
 
-    // If all SKUs have been successfully added and removed from the list, stop the loop
+    // If all SKUs have been added, stop loop
     if (SKUS.length === 0) {
       return stop("all SKUs added to cart");
     }
 
     if (MAX_TRIES && tries >= MAX_TRIES) return stop("max tries reached");
-    timer = setTimeout(attempt, INTERVAL);
+
+    // Schedule next attempt with a randomized interval
+    const nextInterval = getRandomInterval();
+    console.log(
+      `%c[${ts()}] Next attempt in ${(nextInterval / 1000).toFixed(1)}s...`,
+      "color:#888",
+    );
+    timer = setTimeout(attempt, nextInterval);
   }
 
   function stop(reason) {
@@ -145,11 +173,13 @@
 
   window.stopLoop = () => stop("manual stop");
   console.log(
-    "Starting add-to-cart loop for SKUs: " +
+    "Starting concurrent randomized loop for SKUs: " +
       SKUS.join(", ") +
-      " every " +
-      INTERVAL / 1000 +
-      "s. Call stopLoop() to cancel.",
+      " (Interval: " +
+      MIN_INTERVAL / 1000 +
+      "s - " +
+      MAX_INTERVAL / 1000 +
+      "s). Call stopLoop() to cancel.",
   );
   attempt();
 })();
