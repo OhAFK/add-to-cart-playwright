@@ -5,7 +5,7 @@ const sites = require("./sites");
 
 const MONITOR_PERIOD_MS = 900000; // 15 minutes
 const MONITOR_WINDOW_START_OFFSET_MS = 0; // Starts right on the mark (e.g., 9:00:00)
-const MONITOR_WINDOW_END_MS = 30000; // Runs for exactly 30 seconds
+const MONITOR_WINDOW_END_MS = 20000; // Runs for exactly 20 seconds
 const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
 
 // Read port from command line arguments (default to 9222)
@@ -232,9 +232,17 @@ async function monitorProduct({
 
             if (needsReload || SKUS.length === 0) break;
 
-            // Enforce precise 1.5-second spacing from the start of this iteration
+            // --- Human-like randomized delay calculation ---
+            const baseInterval = targetIntervalMs;
+            const minJitter = -300;
+            const maxJitter = 600;
+            const randomJitter =
+              Math.random() * (maxJitter - minJitter) + minJitter;
+            const dynamicInterval = Math.max(200, baseInterval + randomJitter);
+
             const elapsed = performance.now() - iterationStart;
-            const remainingWait = Math.max(0, targetIntervalMs - elapsed);
+            const remainingWait = Math.max(0, dynamicInterval - elapsed);
+
             if (remainingWait > 0) {
               await new Promise((r) => setTimeout(r, remainingWait));
             }
