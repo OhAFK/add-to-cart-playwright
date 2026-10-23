@@ -1,181 +1,317 @@
 // monitor.js
-const { chromium } = require('playwright');
-const fs = require('fs');
-const sites = require('./sites'); // Import your separate configuration file
+const { chromium } = require("playwright");
+const fs = require("fs");
+const sites = require("./sites");
 
-// Refresh interval set to 1–3 seconds (1000ms - 3000ms)
-const MIN_INTERVAL = 1000;
-const MAX_INTERVAL = 3000;
+const MONITOR_PERIOD_MS = 900000; // 15 minutes
+const MONITOR_WINDOW_START_OFFSET_MS = 0; // Starts right on the mark (e.g., 9:00:00)
+const MONITOR_WINDOW_END_MS = 20000; // Runs for exactly 20 seconds
+const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
 
-// Configurable delay before navigating to cart/checkout after clicking "Add to Cart"
-const CART_DELAY_MS = 2000;
+// Read port from command line arguments (default to 9222)
+const CDP_PORT = process.argv[2] || 9222;
+const WORKER_PREFIX = process.argv[3] || "Instance";
 
-// Corrected math calculation for interval range
-const getRandomInterval = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+function getMonitorWindowWaitMs(now = Date.now()) {
+  const phase = now % MONITOR_PERIOD_MS;
 
-// Helper function to record success to a file
-function logSuccessToFile(workerId, name, url) {
+  // If we are currently inside the active window (from 0 to MONITOR_WINDOW_END_MS)
+  if (phase < MONITOR_WINDOW_END_MS) {
+    return 0;
+  }
+
+  // Otherwise, calculate how much time is left until the next period starts
+  return MONITOR_PERIOD_MS - phase;
+}
+
+async function waitForMonitorWindow(page, workerId) {
+  let waitMs = getMonitorWindowWaitMs();
+  while (waitMs > 0) {
+    console.log(
+      `[${WORKER_PREFIX} | Worker #${workerId}] Next monitoring window in ${Math.ceil(waitMs / 1000)} seconds.`,
+    );
+    await page.waitForTimeout(Math.min(waitMs, MONITOR_COUNTDOWN_INTERVAL_MS));
+    waitMs = getMonitorWindowWaitMs();
+  }
+}
+
+function logSuccessToFile(workerId, name, url, sku) {
   const successRecord = {
+    instance: WORKER_PREFIX,
     workerId,
     name,
     url,
-    timestamp: new Date().toISOString()
+    sku,
+    timestamp: new Date().toISOString(),
   };
 
-  const fileName = 'success.json';
+  const fileName = "success.json";
   let existingRecords = [];
 
   try {
     if (fs.existsSync(fileName)) {
-      const fileData = fs.readFileSync(fileName, 'utf8');
-      existingRecords = JSON.parse(fileData);
+      existingRecords = JSON.parse(fs.readFileSync(fileName, "utf8"));
     }
-  } catch (err) {
-    console.warn(`[Warning] Could not read existing ${fileName}, starting a fresh list.`);
-  }
+  } catch (err) {}
 
   existingRecords.push(successRecord);
-
-  try {
-    fs.writeFileSync(fileName, JSON.stringify(existingRecords, null, 2), 'utf8');
-    console.log(`[Worker #${workerId}] Success record saved to ${fileName}`);
-  } catch (err) {
-    console.error(`[Worker #${workerId}] Failed to write success record to file:`, err.message);
-  }
+  fs.writeFileSync(fileName, JSON.stringify(existingRecords, null, 2), "utf8");
+  console.log(
+    `[${WORKER_PREFIX} | Worker #${workerId}] Success record saved for SKU ${sku}`,
+  );
 }
 
 async function monitorProduct({
-  context,
+  page,
   url,
   name,
   workerId,
-  addToCartSelector,
-  checkoutSelector,
-  manualCartUrl
+  addToCartMethod,
+  skus = [],
+  sku,
+  quantity = 1,
+  targetIntervalMs = 1000, // 1000ms interval target for maximum burst speed
+  cartDelayMs = 1000,
+  navigationTimeoutMs = 30000,
 }) {
-  // Reuse the existing browser context to open a new tab for each worker
-  const page = await context.newPage();
+  if (addToCartMethod !== "farmers-post") {
+    throw new Error(`Only the Farmers add-to-cart POST method is supported.`);
+  }
 
-  let attemptCount = 0;
+  let activeSkus = skus.length > 0 ? [...skus] : sku ? [sku] : [];
+
+  console.log(
+    `[${WORKER_PREFIX} | Worker #${workerId} (${name})] Navigating to target URL...`,
+  );
+  await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout: navigationTimeoutMs,
+  });
 
   while (true) {
-    try {
-      attemptCount++;
-      console.log(`[Worker #${workerId} (${name}) | Attempt #${attemptCount}] Checking: ${url}`);
-      
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await waitForMonitorWindow(page, workerId);
 
-      let addToCartBtn = await page.$(addToCartSelector);
-
-      if (addToCartBtn) {
-        const isDisabled = await addToCartBtn.isDisabled();
-        const buttonText = await addToCartBtn.textContent();
-        const className = (await addToCartBtn.getAttribute('class')) || '';
-
-        if (!isDisabled && !buttonText.toLowerCase().includes('sold out') && !className.includes('disabled')) {
-          console.log(`[Worker #${workerId} (${name})][SUCCESS] Item available! Clicking add to cart...`);
-          
-          // --- MESSAGING SUCCESS TO CONSOLE ---
-          console.log(`\n========================================`);
-          console.log(`🎉 SUCCESSFUL ITEM SECURED!`);
-          console.log(`- Worker ID: #${workerId}`);
-          console.log(`- Product Name: ${name}`);
-          console.log(`- Product URL: ${url}`);
-          console.log(`========================================\n`);
-
-          // --- SAVE SUCCESS TO FILE ---
-          logSuccessToFile(workerId, name, url);
-
-          await addToCartBtn.click();
-          
-          // --- WAITING CONFIGURABLE TIME BEFORE CART NAVIGATION ---
-          if (CART_DELAY_MS > 0) {
-            console.log(`[Worker #${workerId}] Waiting ${CART_DELAY_MS}ms before proceeding to cart...`);
-            await page.waitForTimeout(CART_DELAY_MS);
-          }
-          // --------------------------------------------------------
-
-          // --- UPDATED CHECKOUT LOGIC ---
-          if (manualCartUrl) {
-            console.log(`[Worker #${workerId}] Navigating directly to manual cart URL: ${manualCartUrl}`);
-            await page.goto(manualCartUrl, { waitUntil: 'domcontentloaded' });
-          } else if (checkoutSelector) {
-            try {
-              console.log(`[Worker #${workerId}] Waiting for checkout button...`);
-              const checkoutLink = await page.waitForSelector(checkoutSelector, { timeout: 5000 });
-              if (checkoutLink) {
-                console.log(`[Worker #${workerId}] Clicking checkout element...`);
-                await checkoutLink.click();
-              }
-            } catch (checkoutErr) {
-              console.log(`[Worker #${workerId}] Checkout element not found. Leaving on page.`);
-            }
-          }
-          // ------------------------------
-
-          console.log(`[Worker #${workerId}] SUCCESS! Item added. Playing alarm...`);
-
-          // Fixed audio syntaxes (restored missing '*' arithmetic operators)
-          await page.evaluate(() => {
-            try {
-              const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-              for (let i = 0; i < 3; i++) {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.type = "sine";
-                osc.frequency.value = 880;
-                gain.gain.setValueAtTime(0.5, audioCtx.currentTime + (i * 0.2));
-                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + (i * 0.2) + 0.15);
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.start(audioCtx.currentTime + (i * 0.2));
-                osc.stop(audioCtx.currentTime + (i * 0.2) + 0.15);
-              }
-            } catch (e) {
-              console.warn("Audio error:", e);
-            }
-          });
-
-          console.log(`[Worker #${workerId}] Item secured! Pausing this worker.`);
-          await new Promise(() => {}); // Keep tab open
-        } else {
-          console.log(`[Worker #${workerId} (${name})][SOLD OUT / DISABLED]`);
-        }
-      } else {
-        console.log(`[Worker #${workerId} (${name})][SOLD OUT] Add to cart button not found`);
-      }
-
-    } catch (err) {
-      console.error(`[Worker #${workerId} (${name})] Error:`, err.message);
+    if (getMonitorWindowWaitMs() > 0) {
+      continue;
     }
 
-    const delay = getRandomInterval(MIN_INTERVAL, MAX_INTERVAL);
-    console.log(`[Worker #${workerId}] Waiting ${(delay / 1000).toFixed(1)}s before refresh...`);
-    await page.waitForTimeout(delay);
-  }
-}
-
-async function runAll() {
-  console.log(`Connecting to remote Chrome via CDP...`);
-  
-  try {
-    const browser = await chromium.connectOverCDP('http://localhost:9222');
-    const defaultContext = browser.contexts()[0];
-
-    console.log(`Connected! Launching ${sites.length} monitoring workers across separate tabs...`);
-
-    await Promise.all(
-      sites.map((site, index) => 
-        monitorProduct({
-          context: defaultContext,
-          ...site,
-          workerId: index + 1
-        })
-      )
+    console.log(
+      `[${WORKER_PREFIX} | Worker #${workerId} (${name})] 🚀 Starting 20s parallel burst loop for SKUs: [${activeSkus.join(", ")}]`,
     );
-  } catch (err) {
-    console.error("Connection failed. Make sure Chrome is running with remote debugging port 9222 enabled.", err.message);
+
+    try {
+      const burstResult = await page.evaluate(
+        async ({
+          initialSkus,
+          quantity,
+          targetIntervalMs,
+          MONITOR_WINDOW_END_MS,
+        }) => {
+          let SKUS = [...initialSkus];
+          const QTY = quantity;
+          const URL =
+            "https://www.farmers.co.nz/INTERSHOP/web/WFS/Farmers-Shop-Site/en_NZ/-/NZD/ViewExpressShop-AddProduct";
+
+          let tries = 0;
+          const startTime = Date.now();
+          const successfulAdditions = [];
+          const requestLogs = [];
+          let needsReload = false;
+
+          function classify(text, sku) {
+            const doc = new DOMParser().parseFromString(text, "text/html");
+            const modal = doc.querySelector(
+              "#add-to-cart-confirmation .modal-body",
+            );
+            const successBox = modal
+              ? modal.querySelector(".alert-success-alt")
+              : null;
+            const errorP = modal
+              ? modal.querySelector('p[style*="B90618"]')
+              : null;
+            const dangerLi = doc.querySelector("#miniCart .alert-danger li");
+            const pushedSku = new RegExp(
+              '"event":\\s*"addToCart"[\\s\\S]*?"id":\\s*"' + sku + '"',
+            ).test(text);
+            const countEl = doc.querySelector("#mini-cart-count");
+            const cartCount = countEl ? countEl.textContent.trim() : "?";
+
+            if (successBox || pushedSku) return { status: "ADDED", cartCount };
+            if (errorP || dangerLi)
+              return {
+                status: "SOLD OUT",
+                msg: (errorP || dangerLi).textContent.trim(),
+              };
+            return { status: "UNKNOWN", msg: text.slice(0, 300) };
+          }
+
+          while (
+            Date.now() - startTime < MONITOR_WINDOW_END_MS &&
+            SKUS.length > 0
+          ) {
+            tries++;
+            const iterationStart = performance.now();
+
+            const promises = SKUS.map(async (sku) => {
+              const body = `SKU=${sku}&Quantity_${sku}=${QTY}&addToCartBehavior=expresscart`;
+              const requestTimestamp = new Date().toISOString();
+              const startTimePerf = performance.now();
+
+              try {
+                const res = await fetch(URL, {
+                  method: "POST",
+                  mode: "cors",
+                  credentials: "include",
+                  headers: {
+                    accept: "*/*",
+                    "content-type":
+                      "application/x-www-form-urlencoded; charset=UTF-8",
+                    "x-requested-with": "XMLHttpRequest",
+                  },
+                  body: body,
+                });
+
+                const durationMs = Math.round(
+                  performance.now() - startTimePerf,
+                );
+
+                if (res.status === 403) {
+                  requestLogs.push({
+                    timestamp: requestTimestamp,
+                    sku,
+                    status: "HTTP 403 Forbidden",
+                    durationMs,
+                  });
+                  return { sku, error: "HTTP 403 Forbidden" };
+                }
+
+                const text = await res.text();
+                const classification = classify(text, sku);
+
+                requestLogs.push({
+                  timestamp: requestTimestamp,
+                  sku,
+                  httpStatus: res.status,
+                  resultStatus: classification.status,
+                  durationMs,
+                });
+
+                return { sku, result: classification };
+              } catch (err) {
+                const durationMs = Math.round(
+                  performance.now() - startTimePerf,
+                );
+                requestLogs.push({
+                  timestamp: requestTimestamp,
+                  sku,
+                  error: err.message,
+                  durationMs,
+                });
+                return { sku, error: err.message };
+              }
+            });
+
+            const outcomes = await Promise.all(promises);
+
+            for (const outcome of outcomes) {
+              const { sku, result, error } = outcome;
+              const skuIndex = SKUS.indexOf(sku);
+
+              if (error) {
+                if (error.includes("403")) {
+                  needsReload = true;
+                }
+                continue;
+              }
+
+              if (result.status === "ADDED") {
+                successfulAdditions.push({ sku, cartCount: result.cartCount });
+                if (skuIndex > -1) SKUS.splice(skuIndex, 1);
+              }
+            }
+
+            if (needsReload || SKUS.length === 0) break;
+
+            const elapsed = performance.now() - iterationStart;
+            const remainingWait = Math.max(0, targetIntervalMs - elapsed);
+
+            if (remainingWait > 0) {
+              await new Promise((r) => setTimeout(r, remainingWait));
+            }
+          }
+
+          if (needsReload) {
+            window.location.reload();
+          }
+
+          return { successfulAdditions, tries, needsReload, requestLogs };
+        },
+        {
+          initialSkus: activeSkus,
+          quantity,
+          targetIntervalMs,
+          MONITOR_WINDOW_END_MS,
+        },
+      );
+
+      console.log(
+        `\n📋 [${WORKER_PREFIX} | Worker #${workerId}] POST Request Logs for this Burst:`,
+      );
+      console.table(burstResult.requestLogs);
+
+      if (burstResult.needsReload) {
+        console.log(
+          `[${WORKER_PREFIX} | Worker #${workerId}] 🔄 HTTP 403 detected. Page reloaded. Waiting for network stability...`,
+        );
+        await page
+          .waitForLoadState("domcontentloaded", {
+            timeout: navigationTimeoutMs,
+          })
+          .catch(() => {});
+        continue;
+      }
+
+      if (burstResult.successfulAdditions.length > 0) {
+        // Trigger terminal alarm sound/bell
+        process.stdout.write("\x07");
+        console.log(
+          `\n🚨 ALARM! [${WORKER_PREFIX}] SUCCESSFUL ITEM(S) SECURED! 🚨\x07`,
+        );
+
+        for (const item of burstResult.successfulAdditions) {
+          logSuccessToFile(workerId, name, url, item.sku);
+        }
+        if (cartDelayMs > 0) await page.waitForTimeout(cartDelayMs);
+        await new Promise(() => {}); // Hold execution indefinitely on success
+      } else {
+        console.log(
+          `[${WORKER_PREFIX} | Worker #${workerId}] Burst window ended. Tries: ${burstResult.tries}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[${WORKER_PREFIX} | Worker #${workerId}] Error:`,
+        err.message,
+      );
+    }
   }
 }
 
-runAll();
+async function run() {
+  console.log(
+    `[${WORKER_PREFIX}] Connecting to Chrome via CDP on port ${CDP_PORT}...`,
+  );
+  const browser = await chromium.connectOverCDP(`http://localhost:${CDP_PORT}`);
+  const defaultContext = browser.contexts()[0];
+
+  await Promise.all(
+    sites.map(async (site, index) => {
+      const workerId = index + 1;
+      const page = await defaultContext.newPage();
+      await page.route("**/*", (route) => route.continue());
+      return monitorProduct({ page, ...site, workerId });
+    }),
+  );
+}
+
+run();

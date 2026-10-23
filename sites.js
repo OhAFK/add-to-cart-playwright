@@ -1,24 +1,90 @@
 // sites.js
 module.exports = [
+  // {
+  //   name: "test item",
+  //   url: "https://www.farmers.co.nz/home/christmas/room-decorations/christmas-shop-led-ceramic-townhouse-medium-blush-7030428",
+  //   addToCartSelector: 'button[data-testing-id="addToCartButton"]',
+  //   addToCartConfirmationText:
+  //     "You have added the following product to your Farmers shopping cart.",
+  //   manualCartUrl: "https://www.farmers.co.nz/cart",
+  //   refreshIntervalMs: 14000,
+  //   cartDelayMs: 2000,
+  //   addToCartConfirmationTimeoutMs: 15000,
+  //   addToCartWaitTimeoutMs: 5000,
+  //   navigationTimeoutMs: 30000,
+  //   clickTimeoutMs: 10000,
+  // },
+  // {
+  //   name: "test item2",
+  //   url: "https://www.farmers.co.nz/home/home-decor/candles-home-fragrance/home-fusion-sea-salt-bergamot-candle-140g-7032943",
+  //   addToCartSelector: 'button[data-testing-id="addToCartButton"]',
+  //   addToCartConfirmationText:
+  //     "You have added the following product to your Farmers shopping cart.",
+  //   manualCartUrl: "https://www.farmers.co.nz/cart",
+  //   refreshIntervalMs: 14000,
+  //   cartDelayMs: 2000,
+  //   addToCartConfirmationTimeoutMs: 15000,
+  //   addToCartWaitTimeoutMs: 5000,
+  //   navigationTimeoutMs: 30000,
+  //   clickTimeoutMs: 10000,
+  // },
   {
     name: "Farmers - 30th bundle",
     url: "https://www.farmers.co.nz/toys/games-cards-puzzles/pokemon-trading-card-30th-booster-bundle-7064593",
     addToCartSelector: 'button[data-testing-id="addToCartButton"]',
-    checkoutSelector: 'a.btn.btn-primary[href*="/cart"]',
-    manualCartUrl: "https://www.farmers.co.nz/cart"
+    addToCartMethod: "farmers-post",
+    sku: "7064593",
+    addToCartConfirmationText:
+      "You have added the following product to your Farmers shopping cart.",
+    refreshIntervalMs: 14000,
+    cartDelayMs: 2000,
+    addToCartConfirmationTimeoutMs: 15000,
+    addToCartWaitTimeoutMs: 5000,
+    navigationTimeoutMs: 30000,
+    clickTimeoutMs: 10000,
   },
   {
     name: "Farmers - 30th tin",
     url: "https://www.farmers.co.nz/toys/games-cards-puzzles/pokemon-trading-card-30th-mini-tin-assorrted-7064592",
     addToCartSelector: 'button[data-testing-id="addToCartButton"]',
-    checkoutSelector: 'a.btn.btn-primary[href*="/cart"]',
-    manualCartUrl: "https://www.farmers.co.nz/cart"
+    addToCartMethod: "farmers-post",
+    sku: "7064592",
+    addToCartConfirmationText:
+      "You have added the following product to your Farmers shopping cart.",
+    refreshIntervalMs: 14000,
+    cartDelayMs: 2000,
+    addToCartConfirmationTimeoutMs: 15000,
+    addToCartWaitTimeoutMs: 5000,
+    navigationTimeoutMs: 30000,
+    clickTimeoutMs: 10000,
   },
   // {
-  //   name: "JB Hi-Fi - Apple TV 4K 64GB",
-  //   url: "https://www.jbhifi.co.nz/products/apple-tv-4k-wi-fi-64gb-2022",
+  //   name: "Farmers - AH tin",
+  //   url: "https://www.farmers.co.nz/toys/games-cards-puzzles/pokemon-trading-card-me2-5-ascended-heroes-tin-assorted-7062979",
+  //   addToCartSelector: 'button[data-testing-id="addToCartButton"]',
+  //   addToCartMethod: "farmers-post",
+  //   sku: "7062979",
+  //   addToCartConfirmationText:
+  //     "You have added the following product to your Farmers shopping cart.",
+  //   manualCartUrl: "https://www.farmers.co.nz/cart",
+  //   refreshIntervalMs: 14000,
+  //   cartDelayMs: 2000,
+  //   addToCartConfirmationTimeoutMs: 15000,
+  //   addToCartWaitTimeoutMs: 5000,
+  //   navigationTimeoutMs: 30000,
+  //   clickTimeoutMs: 10000,
+  // },
+  // {
+  //   name: "JB Hi-Fi - Pokemon TCG Scarlet & Violet 10.5 Unova Heavy Hitters Premium Collection",
+  //   url: "https://www.jbhifi.co.nz/products/pokemon-tcg-pokemon-tcg-scarlet-violet-10-5-unova-heavy-hitters-premium-collection",
   //   addToCartSelector: 'button[data-testid="add-to-cart-button"]',
-  //   checkoutSelector: null, // Leaves worker on page after adding to cart
-  //   manualCartUrl: "https://www.jbhifi.co.nz/cart"
-  // }
+  //   addToCartConfirmationText: "Item added to your cart!",
+  //   manualCartUrl: "https://www.jbhifi.co.nz/cart",
+  //   refreshIntervalMs: 5000,
+  //   cartDelayMs: 2000,
+  //   addToCartConfirmationTimeoutMs: 15000,
+  //   addToCartWaitTimeoutMs: 5000,
+  //   navigationTimeoutMs: 30000,
+  //   clickTimeoutMs: 10000,
+  // },
 ];
