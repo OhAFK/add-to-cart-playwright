@@ -2,12 +2,12 @@
 // Stop early with: stopLoop()
 
 (() => {
-  const SKUS = ["7064593", "7064592"]; // Add your multiple SKUs here
+  const SKUS = ["7064593"]; // Add your multiple SKUs here
   const QTY = 1;
 
   // Randomization settings (in milliseconds)
-  const MIN_INTERVAL = 1300; // Minimum delay (1.5 seconds)
-  const MAX_INTERVAL = 1800; // Maximum delay (3.0 seconds)
+  const MIN_INTERVAL = 200; // Minimum delay (0.2 seconds)
+  const MAX_INTERVAL = 400; // Maximum delay (0.4 seconds)
 
   const MAX_TRIES = 200; // 0 = run until stopped
   const STOP_ON_ADD = true; // stop looping for a SKU once it's in the cart
@@ -19,7 +19,7 @@
   let timer = null;
   const ts = () => new Date().toLocaleTimeString();
 
-  // Helper to get a random delay between MIN and MAX
+  // Helper to get a random delay between MIN and MAX (Fixed operator)
   function getRandomInterval() {
     return (
       Math.floor(Math.random() * (MAX_INTERVAL - MIN_INTERVAL + 1)) +
@@ -57,6 +57,7 @@
 
   async function attempt() {
     tries++;
+    const startTime = performance.now();
 
     // Fire all SKU fetch requests in parallel using Promise.all
     const promises = SKUS.map(async (sku) => {
@@ -92,6 +93,7 @@
     });
 
     const outcomes = await Promise.all(promises);
+    const networkDuration = ((performance.now() - startTime) / 1000).toFixed(2);
 
     // Process outcomes and manage successfully added SKUs
     for (const outcome of outcomes) {
@@ -129,7 +131,9 @@
             tries +
             " SKU " +
             sku +
-            " [SOLD OUT] " +
+            " [SOLD OUT] (took " +
+            networkDuration +
+            "s) " +
             result.msg,
         );
       } else {

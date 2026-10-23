@@ -1,22 +1,47 @@
 // monitor.js
 const { chromium } = require("playwright");
 const fs = require("fs");
-const sites = require("./sites"); // Import your separate configuration file
+const sites = require("./sites");
 
-// Helper to randomize a base value by a percentage variance (default ±20%)
-function getRandomizedValue(baseValue, variancePercent = 0.2) {
-  if (!baseValue || typeof baseValue !== "number") return baseValue;
-  const min = baseValue * (1 - variancePercent);
-  const max = baseValue * (1 + variancePercent);
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+const MONITOR_PERIOD_MS = 900000; // 15 minutes
+const MONITOR_WINDOW_START_OFFSET_MS = 0; // Starts right on the mark (e.g., 9:00:00)
+const MONITOR_WINDOW_END_MS = 30000; // Runs for exactly 30 seconds
+const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
+
+// Read port from command line arguments (default to 9222)
+const CDP_PORT = process.argv[2] || 9222;
+const WORKER_PREFIX = process.argv[3] || "Instance";
+
+function getMonitorWindowWaitMs(now = Date.now()) {
+  const phase = now % MONITOR_PERIOD_MS;
+
+  // If we are currently inside the active window (from 0 to MONITOR_WINDOW_END_MS)
+  if (phase < MONITOR_WINDOW_END_MS) {
+    return 0;
+  }
+
+  // Otherwise, calculate how much time is left until the next period starts
+  return MONITOR_PERIOD_MS - phase;
 }
 
-// Helper function to record success to a file
-function logSuccessToFile(workerId, name, url) {
+async function waitForMonitorWindow(page, workerId) {
+  let waitMs = getMonitorWindowWaitMs();
+  while (waitMs > 0) {
+    console.log(
+      `[${WORKER_PREFIX} | Worker #${workerId}] Next monitoring window in ${Math.ceil(waitMs / 1000)} seconds.`,
+    );
+    await page.waitForTimeout(Math.min(waitMs, MONITOR_COUNTDOWN_INTERVAL_MS));
+    waitMs = getMonitorWindowWaitMs();
+  }
+}
+
+function logSuccessToFile(workerId, name, url, sku) {
   const successRecord = {
+    instance: WORKER_PREFIX,
     workerId,
     name,
     url,
+    sku,
     timestamp: new Date().toISOString(),
   };
 
@@ -25,326 +50,263 @@ function logSuccessToFile(workerId, name, url) {
 
   try {
     if (fs.existsSync(fileName)) {
-      const fileData = fs.readFileSync(fileName, "utf8");
-      existingRecords = JSON.parse(fileData);
+      existingRecords = JSON.parse(fs.readFileSync(fileName, "utf8"));
     }
-  } catch (err) {
-    console.warn(
-      `[Warning] Could not read existing ${fileName}, starting a fresh list.`,
-    );
-  }
+  } catch (err) {}
 
   existingRecords.push(successRecord);
-
-  try {
-    fs.writeFileSync(
-      fileName,
-      JSON.stringify(existingRecords, null, 2),
-      "utf8",
-    );
-    console.log(`[Worker #${workerId}] Success record saved to ${fileName}`);
-  } catch (err) {
-    console.error(
-      `[Worker #${workerId}] Failed to write success record to file:`,
-      err.message,
-    );
-  }
+  fs.writeFileSync(fileName, JSON.stringify(existingRecords, null, 2), "utf8");
+  console.log(
+    `[${WORKER_PREFIX} | Worker #${workerId}] Success record saved for SKU ${sku}`,
+  );
 }
 
 async function monitorProduct({
-  context,
+  page,
   url,
   name,
   workerId,
-  addToCartSelector,
-  addToCartMethod = "click",
+  addToCartMethod,
+  skus = [],
   sku,
   quantity = 1,
-  addToCartConfirmationText,
-  manualCartUrl,
-  refreshIntervalMs = 5000,
+  targetIntervalMs = 1500, // Explicit 1.5-second interval target
   cartDelayMs = 1000,
-  addToCartConfirmationTimeoutMs = 10000,
-  addToCartWaitTimeoutMs = 5000,
   navigationTimeoutMs = 30000,
-  clickTimeoutMs = 5000,
 }) {
-  const page = await context.newPage();
+  if (addToCartMethod !== "farmers-post") {
+    throw new Error(`Only the Farmers add-to-cart POST method is supported.`);
+  }
 
-  // Force hard refresh / bypass cache by enabling request routing
-  await page.route("**/*", (route) => route.continue());
+  let activeSkus = skus.length > 0 ? [...skus] : sku ? [sku] : [];
 
-  let attemptCount = 0;
+  console.log(
+    `[${WORKER_PREFIX} | Worker #${workerId} (${name})] Navigating to target URL...`,
+  );
+  await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout: navigationTimeoutMs,
+  });
 
   while (true) {
-    // Randomize timeouts and delays per loop iteration to avoid predictable pattern detection
-    const currentRefreshInterval = getRandomizedValue(refreshIntervalMs, 0.25);
-    const currentNavTimeout = getRandomizedValue(navigationTimeoutMs, 0.15);
-    const currentWaitTimeout = getRandomizedValue(addToCartWaitTimeoutMs, 0.2);
-    const currentClickTimeout = getRandomizedValue(clickTimeoutMs, 0.2);
-    const currentConfirmTimeout = getRandomizedValue(
-      addToCartConfirmationTimeoutMs,
-      0.2,
-    );
-    const currentCartDelay = getRandomizedValue(cartDelayMs, 0.25);
+    await waitForMonitorWindow(page, workerId);
 
-    try {
-      attemptCount++;
-
-      // Navigate to Google first before going to the target page
-      console.log(
-        `[Worker #${workerId} (${name}) | Attempt #${attemptCount}] Navigating to Google first...`,
-      );
-      await page.goto("https://www.google.com", {
-        waitUntil: "domcontentloaded",
-        timeout: currentNavTimeout,
-      });
-
-      // Brief randomized pause on Google
-      await page.waitForTimeout(getRandomizedValue(1000, 0.3));
-
-      console.log(
-        `[Worker #${workerId} (${name}) | Attempt #${attemptCount}] Checking: ${url}`,
-      );
-      await page.goto(url, {
-        waitUntil: "domcontentloaded",
-        timeout: currentNavTimeout,
-      });
-
-      const addToCartBtn = page
-        .locator(addToCartSelector)
-        .filter({ visible: true })
-        .first();
-      let addToCartButtonFound = false;
-
-      try {
-        await addToCartBtn.waitFor({
-          state: "visible",
-          timeout: currentWaitTimeout,
-        });
-        addToCartButtonFound = true;
-      } catch (err) {
-        if (err.name !== "TimeoutError") {
-          throw err;
-        }
-        console.log(
-          `[Worker #${workerId} (${name})][NOT FOUND] Add-to-cart button is not visible.`,
-        );
-      }
-
-      if (addToCartButtonFound) {
-        const disabledAttribute = await addToCartBtn.getAttribute("disabled");
-        const isDisabled =
-          disabledAttribute !== null || !(await addToCartBtn.isEnabled());
-        const buttonText = (await addToCartBtn.textContent())?.trim() ?? "";
-        const className = (await addToCartBtn.getAttribute("class")) || "";
-
-        if (
-          !isDisabled &&
-          !buttonText.toLowerCase().includes("sold out") &&
-          !className.includes("disabled")
-        ) {
-          console.log(
-            `[Worker #${workerId} (${name})][SUCCESS] Item available! ${
-              addToCartMethod === "farmers-post"
-                ? "Sending add-to-cart POST..."
-                : "Clicking add to cart..."
-            }`,
-          );
-
-          console.log(`\n========================================`);
-          console.log(`🎉 SUCCESSFUL ITEM SECURED!`);
-          console.log(`- Worker ID: #${workerId}`);
-          console.log(`- Product Name: ${name}`);
-          console.log(`- Product URL: ${url}`);
-          console.log(`========================================\n`);
-
-          if (addToCartMethod === "farmers-post") {
-            if (!sku) {
-              throw new Error("A SKU is required for the Farmers add-to-cart POST.");
-            }
-
-            const postStartedAt = Date.now();
-            const result = await page.evaluate(async ({ sku, quantity }) => {
-              const endpoint =
-                "/INTERSHOP/web/WFS/Farmers-Shop-Site/en_NZ/-/NZD/ViewExpressShop-AddProduct";
-              const body = new URLSearchParams({
-                SKU: sku,
-                [`Quantity_${sku}`]: String(quantity),
-                addToCartBehavior: "expresscart",
-              });
-              const response = await fetch(endpoint, {
-                method: "POST",
-                credentials: "include",
-                headers: {
-                  accept: "*/*",
-                  "content-type":
-                    "application/x-www-form-urlencoded; charset=UTF-8",
-                  "x-requested-with": "XMLHttpRequest",
-                },
-                body,
-              });
-              const text = await response.text();
-              const doc = new DOMParser().parseFromString(text, "text/html");
-              const modal = doc.querySelector(
-                "#add-to-cart-confirmation .modal-body",
-              );
-              const successBox = modal?.querySelector(".alert-success-alt");
-              const errorMessage =
-                modal?.querySelector('p[style*="B90618"]') ||
-                doc.querySelector("#miniCart .alert-danger li");
-              const pushedSku = new RegExp(
-                '"event":\\s*"addToCart"[\\s\\S]*?"id":\\s*"' + sku + '"',
-              ).test(text);
-              const count = doc.querySelector("#mini-cart-count");
-
-              return {
-                httpStatus: response.status,
-                ok: response.ok,
-                status:
-                  successBox || pushedSku
-                    ? "ADDED"
-                    : errorMessage
-                      ? "SOLD OUT"
-                      : "UNKNOWN",
-                message:
-                  successBox?.textContent.trim() ||
-                  errorMessage?.textContent.trim() ||
-                  text.slice(0, 300),
-                cartCount: count?.textContent.trim() || "?",
-              };
-            }, { sku, quantity });
-
-            console.log(
-              `[Worker #${workerId}] Farmers add-to-cart POST completed in ${Date.now() - postStartedAt}ms (HTTP ${result.httpStatus}).`,
-            );
-            if (!result.ok || result.status !== "ADDED") {
-              throw new Error(
-                `Farmers POST did not confirm add (${result.status}, HTTP ${result.httpStatus}): ${result.message}`,
-              );
-            }
-            console.log(
-              `[Worker #${workerId}] Farmers POST confirmed add; cart count: ${result.cartCount}.`,
-            );
-          } else {
-            const clickStartedAt = Date.now();
-            await addToCartBtn.click({ timeout: currentClickTimeout });
-            console.log(
-              `[Worker #${workerId}] Add-to-cart click completed in ${Date.now() - clickStartedAt}ms.`,
-            );
-          }
-
-          if (addToCartMethod !== "farmers-post" && addToCartConfirmationText) {
-            console.log(
-              `[Worker #${workerId}] Waiting for add-to-cart confirmation: "${addToCartConfirmationText}"`,
-            );
-            await page
-              .getByText(addToCartConfirmationText, { exact: false })
-              .waitFor({
-                state: "visible",
-                timeout: currentConfirmTimeout,
-              });
-            console.log(
-              `[Worker #${workerId}] Add-to-cart confirmation received.`,
-            );
-          } else if (currentCartDelay > 0) {
-            console.log(
-              `[Worker #${workerId}] Waiting ${currentCartDelay}ms before proceeding to cart...`,
-            );
-            await page.waitForTimeout(currentCartDelay);
-          }
-
-          logSuccessToFile(workerId, name, url);
-
-          console.log(
-            `[Worker #${workerId}] SUCCESS! Item added. Playing alarm...`,
-          );
-
-          await page.evaluate(async () => {
-            try {
-              const audioCtx = new (
-                window.AudioContext || window.webkitAudioContext
-              )();
-              await audioCtx.resume();
-              for (let i = 0; i < 3; i++) {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.type = "sine";
-                osc.frequency.value = 880;
-                gain.gain.setValueAtTime(0.5, audioCtx.currentTime + i * 0.2);
-                gain.gain.exponentialRampToValueAtTime(
-                  0.01,
-                  audioCtx.currentTime + i * 0.2 + 0.15,
-                );
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.start(audioCtx.currentTime + i * 0.2);
-                osc.stop(audioCtx.currentTime + i * 0.2 + 0.15);
-              }
-              await new Promise((resolve) => setTimeout(resolve, 800));
-              await audioCtx.close();
-            } catch (e) {
-              console.warn("Audio error:", e);
-            }
-          });
-
-          console.log(
-            `[Worker #${workerId}] Navigating directly to manual cart URL: ${manualCartUrl}`,
-          );
-          await page.goto(manualCartUrl, {
-            waitUntil: "domcontentloaded",
-            timeout: currentNavTimeout,
-          });
-
-          console.log(
-            `[Worker #${workerId}] Item secured! Pausing this worker.`,
-          );
-          await new Promise(() => {});
-        } else {
-          console.log(
-            `[Worker #${workerId} (${name})][NOT CLICKED] ` +
-              `disabled attribute: ${disabledAttribute === null ? "absent" : JSON.stringify(disabledAttribute)}; ` +
-              `enabled: ${!isDisabled}; text: "${buttonText}"`,
-          );
-        }
-      }
-    } catch (err) {
-      console.error(`[Worker #${workerId} (${name})] Error:`, err.message);
+    if (getMonitorWindowWaitMs() > 0) {
+      continue;
     }
 
     console.log(
-      `[Worker #${workerId}] Waiting ${(currentRefreshInterval / 1000).toFixed(1)}s before refresh...`,
+      `[${WORKER_PREFIX} | Worker #${workerId} (${name})] 🚀 Starting parallel burst loop for SKUs: [${activeSkus.join(", ")}]`,
     );
-    await page.waitForTimeout(currentRefreshInterval);
+
+    try {
+      const burstResult = await page.evaluate(
+        async ({
+          initialSkus,
+          quantity,
+          targetIntervalMs,
+          MONITOR_WINDOW_END_MS,
+        }) => {
+          let SKUS = [...initialSkus];
+          const QTY = quantity;
+          const URL =
+            "/INTERSHOP/web/WFS/Farmers-Shop-Site/en_NZ/-/NZD/ViewExpressShop-AddProduct";
+
+          let tries = 0;
+          const startTime = Date.now();
+          const successfulAdditions = [];
+          const requestLogs = [];
+          let needsReload = false;
+
+          function classify(text, sku) {
+            const doc = new DOMParser().parseFromString(text, "text/html");
+            const modal = doc.querySelector(
+              "#add-to-cart-confirmation .modal-body",
+            );
+            const successBox = modal
+              ? modal.querySelector(".alert-success-alt")
+              : null;
+            const errorP = modal
+              ? modal.querySelector('p[style*="B90618"]')
+              : null;
+            const dangerLi = doc.querySelector("#miniCart .alert-danger li");
+            const pushedSku = new RegExp(
+              '"event":\\s*"addToCart"[\\s\\S]*?"id":\\s*"' + sku + '"',
+            ).test(text);
+            const countEl = doc.querySelector("#mini-cart-count");
+            const cartCount = countEl ? countEl.textContent.trim() : "?";
+
+            if (successBox || pushedSku) return { status: "ADDED", cartCount };
+            if (errorP || dangerLi)
+              return {
+                status: "SOLD OUT",
+                msg: (errorP || dangerLi).textContent.trim(),
+              };
+            return { status: "UNKNOWN", msg: text.slice(0, 300) };
+          }
+
+          while (
+            Date.now() - startTime < MONITOR_WINDOW_END_MS &&
+            SKUS.length > 0
+          ) {
+            tries++;
+            const iterationStart = performance.now();
+
+            const promises = SKUS.map(async (sku) => {
+              const body = `SKU=${sku}&Quantity_${sku}=${QTY}&addToCartBehavior=expresscart`;
+              const requestTimestamp = new Date().toISOString();
+              const startTimePerf = performance.now();
+
+              try {
+                const res = await fetch(URL, {
+                  method: "POST",
+                  mode: "cors",
+                  credentials: "include",
+                  headers: {
+                    accept: "*/*",
+                    "content-type":
+                      "application/x-www-form-urlencoded; charset=UTF-8",
+                    "x-requested-with": "XMLHttpRequest",
+                  },
+                  body: body,
+                });
+
+                const durationMs = Math.round(
+                  performance.now() - startTimePerf,
+                );
+
+                if (res.status === 403) {
+                  requestLogs.push({
+                    timestamp: requestTimestamp,
+                    sku,
+                    status: "HTTP 403 Forbidden",
+                    durationMs,
+                  });
+                  return { sku, error: "HTTP 403 Forbidden" };
+                }
+
+                const text = await res.text();
+                const classification = classify(text, sku);
+
+                requestLogs.push({
+                  timestamp: requestTimestamp,
+                  sku,
+                  httpStatus: res.status,
+                  resultStatus: classification.status,
+                  durationMs,
+                });
+
+                return { sku, result: classification };
+              } catch (err) {
+                const durationMs = Math.round(
+                  performance.now() - startTimePerf,
+                );
+                requestLogs.push({
+                  timestamp: requestTimestamp,
+                  sku,
+                  error: err.message,
+                  durationMs,
+                });
+                return { sku, error: err.message };
+              }
+            });
+
+            const outcomes = await Promise.all(promises);
+
+            for (const outcome of outcomes) {
+              const { sku, result, error } = outcome;
+              const skuIndex = SKUS.indexOf(sku);
+
+              if (error) {
+                if (error.includes("403")) {
+                  needsReload = true;
+                }
+                continue;
+              }
+
+              if (result.status === "ADDED") {
+                successfulAdditions.push({ sku, cartCount: result.cartCount });
+                if (skuIndex > -1) SKUS.splice(skuIndex, 1);
+              }
+            }
+
+            if (needsReload || SKUS.length === 0) break;
+
+            // Enforce precise 1.5-second spacing from the start of this iteration
+            const elapsed = performance.now() - iterationStart;
+            const remainingWait = Math.max(0, targetIntervalMs - elapsed);
+            if (remainingWait > 0) {
+              await new Promise((r) => setTimeout(r, remainingWait));
+            }
+          }
+
+          if (needsReload) {
+            window.location.reload();
+          }
+
+          return { successfulAdditions, tries, needsReload, requestLogs };
+        },
+        {
+          initialSkus: activeSkus,
+          quantity,
+          targetIntervalMs,
+          MONITOR_WINDOW_END_MS,
+        },
+      );
+
+      console.log(
+        `\n📋 [${WORKER_PREFIX} | Worker #${workerId}] POST Request Logs for this Burst:`,
+      );
+      console.table(burstResult.requestLogs);
+
+      if (burstResult.needsReload) {
+        console.log(
+          `[${WORKER_PREFIX} | Worker #${workerId}] 🔄 HTTP 403 detected. Page reloaded. Waiting for network stability...`,
+        );
+        await page
+          .waitForLoadState("domcontentloaded", {
+            timeout: navigationTimeoutMs,
+          })
+          .catch(() => {});
+        continue;
+      }
+
+      if (burstResult.successfulAdditions.length > 0) {
+        console.log(`\n🎉 [${WORKER_PREFIX}] SUCCESSFUL ITEM(S) SECURED!`);
+        for (const item of burstResult.successfulAdditions) {
+          logSuccessToFile(workerId, name, url, item.sku);
+        }
+        if (cartDelayMs > 0) await page.waitForTimeout(cartDelayMs);
+        await new Promise(() => {});
+      } else {
+        console.log(
+          `[${WORKER_PREFIX} | Worker #${workerId}] Burst window ended. Tries: ${burstResult.tries}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[${WORKER_PREFIX} | Worker #${workerId}] Error:`,
+        err.message,
+      );
+    }
   }
 }
 
-async function runAll() {
-  console.log(`Connecting to existing Chrome via CDP (port 9222)...`);
+async function run() {
+  console.log(
+    `[${WORKER_PREFIX}] Connecting to Chrome via CDP on port ${CDP_PORT}...`,
+  );
+  const browser = await chromium.connectOverCDP(`http://localhost:${CDP_PORT}`);
+  const defaultContext = browser.contexts()[0];
 
-  try {
-    const browser = await chromium.connectOverCDP("http://localhost:9222");
-    const defaultContext = browser.contexts()[0];
-
-    console.log(
-      `Connected! Launching ${sites.length} monitoring workers across separate tabs...`,
-    );
-
-    await Promise.all(
-      sites.map((site, index) =>
-        monitorProduct({
-          context: defaultContext,
-          ...site,
-          workerId: index + 1,
-        }),
-      ),
-    );
-  } catch (err) {
-    console.error(
-      "Connection failed. Make sure Chrome is running with remote debugging port 9222 enabled.",
-      err.message,
-    );
-  }
+  await Promise.all(
+    sites.map(async (site, index) => {
+      const workerId = index + 1;
+      const page = await defaultContext.newPage();
+      await page.route("**/*", (route) => route.continue());
+      return monitorProduct({ page, ...site, workerId });
+    }),
+  );
 }
 
-runAll();
+run();
