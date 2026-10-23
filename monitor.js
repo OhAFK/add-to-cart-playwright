@@ -70,7 +70,7 @@ async function monitorProduct({
   skus = [],
   sku,
   quantity = 1,
-  targetIntervalMs = 1500, // Explicit 1.5-second interval target
+  targetIntervalMs = 1000, // 1000ms interval target for maximum burst speed
   cartDelayMs = 1000,
   navigationTimeoutMs = 30000,
 }) {
@@ -96,7 +96,7 @@ async function monitorProduct({
     }
 
     console.log(
-      `[${WORKER_PREFIX} | Worker #${workerId} (${name})] 🚀 Starting parallel burst loop for SKUs: [${activeSkus.join(", ")}]`,
+      `[${WORKER_PREFIX} | Worker #${workerId} (${name})] 🚀 Starting 20s parallel burst loop for SKUs: [${activeSkus.join(", ")}]`,
     );
 
     try {
@@ -110,7 +110,7 @@ async function monitorProduct({
           let SKUS = [...initialSkus];
           const QTY = quantity;
           const URL =
-            "/INTERSHOP/web/WFS/Farmers-Shop-Site/en_NZ/-/NZD/ViewExpressShop-AddProduct";
+            "https://www.farmers.co.nz/INTERSHOP/web/WFS/Farmers-Shop-Site/en_NZ/-/NZD/ViewExpressShop-AddProduct";
 
           let tries = 0;
           const startTime = Date.now();
@@ -232,16 +232,8 @@ async function monitorProduct({
 
             if (needsReload || SKUS.length === 0) break;
 
-            // --- Human-like randomized delay calculation ---
-            const baseInterval = targetIntervalMs;
-            const minJitter = -300;
-            const maxJitter = 600;
-            const randomJitter =
-              Math.random() * (maxJitter - minJitter) + minJitter;
-            const dynamicInterval = Math.max(200, baseInterval + randomJitter);
-
             const elapsed = performance.now() - iterationStart;
-            const remainingWait = Math.max(0, dynamicInterval - elapsed);
+            const remainingWait = Math.max(0, targetIntervalMs - elapsed);
 
             if (remainingWait > 0) {
               await new Promise((r) => setTimeout(r, remainingWait));
@@ -280,12 +272,17 @@ async function monitorProduct({
       }
 
       if (burstResult.successfulAdditions.length > 0) {
-        console.log(`\n🎉 [${WORKER_PREFIX}] SUCCESSFUL ITEM(S) SECURED!`);
+        // Trigger terminal alarm sound/bell
+        process.stdout.write("\x07");
+        console.log(
+          `\n🚨 ALARM! [${WORKER_PREFIX}] SUCCESSFUL ITEM(S) SECURED! 🚨\x07`,
+        );
+
         for (const item of burstResult.successfulAdditions) {
           logSuccessToFile(workerId, name, url, item.sku);
         }
         if (cartDelayMs > 0) await page.waitForTimeout(cartDelayMs);
-        await new Promise(() => {});
+        await new Promise(() => {}); // Hold execution indefinitely on success
       } else {
         console.log(
           `[${WORKER_PREFIX} | Worker #${workerId}] Burst window ended. Tries: ${burstResult.tries}`,

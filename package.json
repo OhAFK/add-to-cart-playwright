@@ -14,5 +14,12 @@
   "dependencies": {
     "playwright": "^1.64.1"
   },
-  "devDependencies": {}
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OhAFK/add-to-cart-playwright.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OhAFK/add-to-cart-playwright/issues"
+  },
+  "homepage": "https://github.com/OhAFK/add-to-cart-playwright#readme"
 }
