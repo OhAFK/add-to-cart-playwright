@@ -1,4 +1,6 @@
 // monitor.js
+require("dotenv").config();
+
 const { chromium } = require("playwright");
 const fs = require("fs");
 const sites = require("./sites");
@@ -7,7 +9,18 @@ const MONITOR_PERIOD_MS = 30000; // 2 minutes total period (including offset and
 const MONITOR_WINDOW_START_OFFSET_MS = 0; // Starts 5 seconds before every 15-minute mark
 const MONITOR_WINDOW_END_MS = 28000; // Runs for 60 seconds total (covering offset + burst duration)
 const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
-const DEFAULT_TARGET_INTERVAL_MS = 2000; // Default interval between requests in milliseconds
+const DEFAULT_TARGET_INTERVAL_MS = 3200; // Default interval between requests in milliseconds
+
+// ===== DISCORD CONFIGURATION =====
+const DISCORD_SUCCESS_WEBHOOK_URL =
+  process.env.DISCORD_SUCCESS_WEBHOOK_URL ||
+  process.env.DISCORD_WEBHOOK_URL ||
+  "YOUR_DISCORD_SUCCESS_WEBHOOK_URL_HERE";
+const DISCORD_ERROR_WEBHOOK_URL =
+  process.env.DISCORD_ERROR_WEBHOOK_URL ||
+  process.env.DISCORD_WEBHOOK_URL ||
+  "YOUR_DISCORD_ERROR_WEBHOOK_URL_HERE";
+const DISCORD_PING_TARGET = "@everyone"; // or leave empty "" if you don't want a ping for successes
 
 // Read port from command line arguments (default to 9222)
 const CDP_PORT = process.argv[2] || 9222;
@@ -15,7 +28,6 @@ const WORKER_PREFIX = process.argv[3] || "Instance";
 
 /**
  * Applies a random jitter percentage to a base millisecond value.
- *
  * @param {number} baseMs The base time in milliseconds.
  * @param {number} jitterPercent Fraction of jitter (e.g. 0.2 for +/- 20%).
  * @returns {number} Jittered milliseconds value.
@@ -44,6 +56,114 @@ function getNewZealandTimestamp(date = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
+/**
+ * Sends a notification message for successful cart additions to Discord.
+ */
+async function sendDiscordAlert(workerId, name, url, sku, cartCount) {
+  if (
+    !DISCORD_SUCCESS_WEBHOOK_URL ||
+    DISCORD_SUCCESS_WEBHOOK_URL.includes(
+      "YOUR_DISCORD_SUCCESS_WEBHOOK_URL_HERE",
+    )
+  ) {
+    return;
+  }
+
+  const payload = {
+    content: DISCORD_PING_TARGET
+      ? `${DISCORD_PING_TARGET} 🚨 **ITEM SECURED!**`
+      : "🚨 **ITEM SECURED!**",
+    embeds: [
+      {
+        title: "🛒 Successful Cart Addition!",
+        color: 65280, // Green color
+        fields: [
+          {
+            name: "Instance / Worker",
+            value: `${WORKER_PREFIX} (#${workerId})`,
+            inline: true,
+          },
+          {
+            name: "Product Name",
+            value: name || "Unknown Product",
+            inline: true,
+          },
+          { name: "SKU", value: String(sku), inline: true },
+          { name: "Cart Count", value: String(cartCount), inline: true },
+          { name: "Time (NZ)", value: getNewZealandTimestamp(), inline: false },
+          { name: "Product URL", value: url, inline: false },
+        ],
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+
+  try {
+    await fetch(DISCORD_SUCCESS_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error(
+      `[${WORKER_PREFIX} | Worker #${workerId}] Error sending Discord success alert:`,
+      err.message,
+    );
+  }
+}
+
+/**
+ * Sends a notification message for errors/warnings to Discord.
+ */
+async function sendErrorDiscordAlert(workerId, name, url, sku, errorMsg) {
+  if (
+    !DISCORD_ERROR_WEBHOOK_URL ||
+    DISCORD_ERROR_WEBHOOK_URL.includes("YOUR_DISCORD_ERROR_WEBHOOK_URL_HERE")
+  ) {
+    return;
+  }
+
+  const payload = {
+    content: `${DISCORD_PING_TARGET} ⚠️ **MONITOR BROKEN / BLOCKED!**`, // Pings you when it breaks
+    embeds: [
+      {
+        title: "⚠️ Monitor Error / Blocked",
+        color: 16711680, // Red color
+        fields: [
+          {
+            name: "Instance / Worker",
+            value: `${WORKER_PREFIX} (#${workerId})`,
+            inline: true,
+          },
+          {
+            name: "Product Name",
+            value: name || "Unknown Product",
+            inline: true,
+          },
+          { name: "SKU", value: String(sku || "N/A"), inline: true },
+          { name: "Error / Status", value: String(errorMsg), inline: false },
+          { name: "Time (NZ)", value: getNewZealandTimestamp(), inline: false },
+          { name: "Product URL", value: url, inline: false },
+        ],
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+
+  try {
+    await fetch(DISCORD_ERROR_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    console.error(
+      `[${WORKER_PREFIX} | Worker #${workerId}] Error sending Discord error alert:`,
+      err.message,
+    );
+  }
+}
+
 function getMonitorWindowWaitMs(now = Date.now()) {
   const period = MONITOR_PERIOD_MS;
   const offset = MONITOR_WINDOW_START_OFFSET_MS;
@@ -51,7 +171,7 @@ function getMonitorWindowWaitMs(now = Date.now()) {
 
   const phase = now % period;
 
-  const windowStartPhase = (period - (offset % period)) % period;
+  const windowStartPhase = (period + (offset % period)) % period;
   const windowEndPhase = (windowStartPhase + duration) % period;
 
   let isInside = false;
@@ -90,13 +210,14 @@ async function waitForMonitorWindow(page, workerId) {
   }
 }
 
-function logSuccessToFile(workerId, name, url, sku) {
+async function logSuccessToFile(workerId, name, url, sku, cartCount) {
   const successRecord = {
     instance: WORKER_PREFIX,
     workerId,
     name,
     url,
     sku,
+    cartCount,
     timestamp: getNewZealandTimestamp(),
   };
 
@@ -114,6 +235,8 @@ function logSuccessToFile(workerId, name, url, sku) {
   console.log(
     `[${WORKER_PREFIX} | Worker #${workerId}] Success record saved for SKU ${sku}`,
   );
+
+  await sendDiscordAlert(workerId, name, url, sku, cartCount);
 }
 
 async function monitorProduct({
@@ -183,6 +306,13 @@ async function monitorProduct({
             console.error(
               `[${WORKER_PREFIX} | Worker #${workerId} (${name})] Hard refresh error:`,
               err.message,
+            );
+            await sendErrorDiscordAlert(
+              workerId,
+              name,
+              url,
+              null,
+              `Hard refresh error: ${err.message}`,
             );
           }
 
@@ -267,7 +397,6 @@ async function monitorProduct({
                 : null;
               const dangerLi = doc.querySelector("#miniCart .alert-danger li");
 
-              // Explicitly check for error / sold out indicators FIRST
               if (errorP || dangerLi) {
                 return {
                   status: "SOLD OUT",
@@ -291,7 +420,6 @@ async function monitorProduct({
                 }
               }
 
-              // If success box is present OR mini-cart-count is greater than 0, treat as ADDED
               if (cartCountNum > 0) {
                 return { status: "ADDED", cartCount: cartCountStr };
               }
@@ -416,10 +544,6 @@ async function monitorProduct({
               }
             }
 
-            if (needsReload) {
-              window.location.reload();
-            }
-
             return { successfulAdditions, tries, needsReload, requestLogs };
           },
           {
@@ -435,27 +559,54 @@ async function monitorProduct({
         );
         console.table(burstResult.requestLogs);
 
+        // Check if any requests returned HTTP 403 or errors and send alert to Discord
+        for (const log of burstResult.requestLogs) {
+          if (log.status === "HTTP 403 Forbidden" || log.error) {
+            await sendErrorDiscordAlert(
+              workerId,
+              name,
+              url,
+              log.sku,
+              log.status || log.error,
+            );
+          }
+        }
+
         if (burstResult.needsReload) {
           console.log(
             `[${WORKER_PREFIX} | Worker #${workerId}] 🔄 HTTP 403 detected. Page reloaded. Waiting for network stability...`,
           );
           await page
-            .waitForLoadState("domcontentloaded", {
+            .reload({
+              waitUntil: "domcontentloaded",
               timeout: navigationTimeoutMs,
             })
-            .catch(() => {});
+            .catch((err) => {
+              sendErrorDiscordAlert(
+                workerId,
+                name,
+                url,
+                null,
+                `Reload failure: ${err.message}`,
+              );
+            });
           continue;
         }
 
         if (burstResult.successfulAdditions.length > 0) {
-          // Terminal audible beep
           process.stdout.write("\x07");
           console.log(
             `\n🚨 ALARM! [${WORKER_PREFIX}] SUCCESSFUL ITEM(S) SECURED! 🚨\x07`,
           );
 
           for (const item of burstResult.successfulAdditions) {
-            logSuccessToFile(workerId, name, url, item.sku);
+            await logSuccessToFile(
+              workerId,
+              name,
+              url,
+              item.sku,
+              item.cartCount,
+            );
           }
           if (cartDelayMs > 0) {
             const jitteredCartDelay = applyJitter(cartDelayMs, 0.2);
@@ -472,6 +623,13 @@ async function monitorProduct({
       console.error(
         `[${WORKER_PREFIX} | Worker #${workerId}] Error:`,
         err.message,
+      );
+      await sendErrorDiscordAlert(
+        workerId,
+        name,
+        url,
+        null,
+        `Runtime Error: ${err.message}`,
       );
     }
   }

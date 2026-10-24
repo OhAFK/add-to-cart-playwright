@@ -4,7 +4,7 @@ module.exports = [
     name: "Farmers Homepage",
     url: "https://www.farmers.co.nz/7044418",
     addToCartMethod: "refresh-only",
-    targetIntervalMs: 6000,
+    targetIntervalMs: 12000,
   },
   // {
   //   name: "Farmers - 30th bundle",
