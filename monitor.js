@@ -9,7 +9,9 @@ const MONITOR_PERIOD_MS = 30000; // 2 minutes total period (including offset and
 const MONITOR_WINDOW_START_OFFSET_MS = 0; // Starts 5 seconds before every 15-minute mark
 const MONITOR_WINDOW_END_MS = 28000; // Runs for 60 seconds total (covering offset + burst duration)
 const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
-const DEFAULT_TARGET_INTERVAL_MS = 3200; // Default interval between requests in milliseconds
+const DEFAULT_TARGET_INTERVAL_MS = 3000; // Default interval between requests in milliseconds
+const BROWSER_RESTART_ERROR_THRESHOLD = 5;
+const BROWSER_RESTART_EXIT_CODE = 75;
 
 // ===== DISCORD CONFIGURATION =====
 const DISCORD_SUCCESS_WEBHOOK_URL =
@@ -262,6 +264,7 @@ async function monitorProduct({
   }
 
   let activeSkus = skus.length > 0 ? [...skus] : sku ? [sku] : [];
+  const consecutiveErrorsBySku = new Map();
 
   console.log(
     `[${WORKER_PREFIX} | Worker #${workerId} (${name})] Navigating to target URL...`,
@@ -554,22 +557,43 @@ async function monitorProduct({
           },
         );
 
+        let browserRestartRequested = false;
+        for (const log of burstResult.requestLogs) {
+          const error = log.status === "HTTP 403 Forbidden" || log.error;
+          const consecutiveErrors = error
+            ? (consecutiveErrorsBySku.get(log.sku) || 0) + 1
+            : 0;
+
+          if (error) {
+            consecutiveErrorsBySku.set(log.sku, consecutiveErrors);
+          } else {
+            consecutiveErrorsBySku.delete(log.sku);
+          }
+          log.consecutiveErrors = consecutiveErrors;
+
+          if (error && consecutiveErrors === BROWSER_RESTART_ERROR_THRESHOLD) {
+            const message =
+              `SKU ${log.sku}: ${log.status || log.error} ` +
+              `(${consecutiveErrors} consecutive errors). The browser will restart.`;
+            console.warn(`[${WORKER_PREFIX} | Worker #${workerId}] ${message}`);
+            browserRestartRequested = true;
+            await sendErrorDiscordAlert(workerId, name, url, log.sku, message);
+          }
+        }
+
         console.log(
           `\n📋 [${WORKER_PREFIX} | Worker #${workerId}] POST Request Logs for this Burst:`,
         );
         console.table(burstResult.requestLogs);
 
-        // Check if any requests returned HTTP 403 or errors and send alert to Discord
-        for (const log of burstResult.requestLogs) {
-          if (log.status === "HTTP 403 Forbidden" || log.error) {
-            await sendErrorDiscordAlert(
-              workerId,
-              name,
-              url,
-              log.sku,
-              log.status || log.error,
-            );
-          }
+        if (browserRestartRequested) {
+          console.error(
+            `[${WORKER_PREFIX} | Worker #${workerId}] Restarting browser after ${BROWSER_RESTART_ERROR_THRESHOLD} consecutive request errors.`,
+          );
+          process.stdout.write("", () =>
+            process.exit(BROWSER_RESTART_EXIT_CODE),
+          );
+          return;
         }
 
         if (burstResult.needsReload) {
