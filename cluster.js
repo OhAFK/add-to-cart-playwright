@@ -6,8 +6,8 @@ const path = require("path");
 const instances = [
   { name: "Browser-Account-1", port: 9222, profileDir: "./chrome-profile-1" },
   { name: "Browser-Account-2", port: 9223, profileDir: "./chrome-profile-2" },
-  { name: "Browser-Account-3", port: 9224, profileDir: "./chrome-profile-3" },
-  { name: "Browser-Account-4", port: 9225, profileDir: "./chrome-profile-4" },
+  // { name: "Browser-Account-3", port: 9224, profileDir: "./chrome-profile-3" },
+  // { name: "Browser-Account-4", port: 9225, profileDir: "./chrome-profile-4" },
   // { name: "Browser-Account-5", port: 9226, profileDir: "./chrome-profile-5" },
   // { name: "Browser-Account-6", port: 9227, profileDir: "./chrome-profile-6" },
   // { name: "Browser-Account-7", port: 9228, profileDir: "./chrome-profile-7" },
