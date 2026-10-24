@@ -12,6 +12,40 @@ const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
 const CDP_PORT = process.argv[2] || 9222;
 const WORKER_PREFIX = process.argv[3] || "Instance";
 
+function getNewZealandTimestamp(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-NZ", {
+      timeZone: "Pacific/Auckland",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .map(({ type, value }) => [type, value]),
+  );
+  const localTimeAsUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  const offsetMinutes = Math.round((localTimeAsUtc - date.getTime()) / 60000);
+  const offsetSign = offsetMinutes >= 0 ? "+" : "-";
+  const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(
+    2,
+    "0",
+  );
+  const offsetRemainder = String(Math.abs(offsetMinutes) % 60).padStart(2, "0");
+
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${String(date.getMilliseconds()).padStart(3, "0")}${offsetSign}${offsetHours}:${offsetRemainder}`;
+}
+
 function getMonitorWindowWaitMs(now = Date.now()) {
   const phase = now % MONITOR_PERIOD_MS;
 
@@ -42,7 +76,7 @@ function logSuccessToFile(workerId, name, url, sku) {
     name,
     url,
     sku,
-    timestamp: new Date().toISOString(),
+    timestamp: getNewZealandTimestamp(),
   };
 
   const fileName = "success.json";
