@@ -5,7 +5,7 @@ const path = require("path");
 // Define your separate browser instances
 const instances = [
   { name: "Browser-Account-1", port: 9222, profileDir: "./chrome-profile-1" },
-  { name: "Browser-Account-2", port: 9223, profileDir: "./chrome-profile-2" },
+  // { name: "Browser-Account-2", port: 9223, profileDir: "./chrome-profile-2" },
   // { name: "Browser-Account-3", port: 9224, profileDir: "./chrome-profile-3" },
   // { name: "Browser-Account-4", port: 9225, profileDir: "./chrome-profile-4" },
   // { name: "Browser-Account-5", port: 9226, profileDir: "./chrome-profile-5" },
@@ -34,18 +34,28 @@ const chromeExe = getChromePath();
 instances.forEach((inst) => {
   console.log(`[Cluster] Launching ${inst.name} on port ${inst.port}...`);
 
-  // 1. Launch Chrome instance with isolated profile and remote debugging port
-  const chromeProcess = spawn(chromeExe, [
-    `--remote-debugging-port=${inst.port}`,
-    `--user-data-dir=${path.resolve(inst.profileDir)}`,
-    "https://www.farmers.co.nz", // Open starting page to log in
-  ]);
+  // 1. Launch Chrome instance with isolated profile, remote debugging port, and detached mode
+  const chromeProcess = spawn(
+    chromeExe,
+    [
+      `--remote-debugging-port=${inst.port}`,
+      `--user-data-dir=${path.resolve(inst.profileDir)}`,
+      "https://www.farmers.co.nz", // Open starting page to log in
+    ],
+    {
+      detached: true,
+      stdio: "ignore", // Ignore stdio so the background process doesn't tie up cluster.js IO
+    },
+  );
+
+  // Allow the parent process to exit independently of the spawned Chrome process
+  chromeProcess.unref();
 
   chromeProcess.on("error", (err) => {
     console.error(`[Cluster] Failed to start ${inst.name}:`, err.message);
   });
 
-  // Give Chrome 3 seconds to spin up, then start the monitor script for this instance
+  // Give Chrome 10 seconds to spin up, then start the monitor script for this instance
   setTimeout(() => {
     console.log(`[Cluster] Starting monitor worker for ${inst.name}...`);
     const monitorProcess = spawn("node", ["monitor.js", inst.port, inst.name], {

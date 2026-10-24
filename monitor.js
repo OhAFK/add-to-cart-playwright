@@ -3,10 +3,11 @@ const { chromium } = require("playwright");
 const fs = require("fs");
 const sites = require("./sites");
 
-const MONITOR_PERIOD_MS = 900000; // 15 minutes
-const MONITOR_WINDOW_START_OFFSET_MS = 5000; // Starts 5 seconds before every 15-minute mark
-const MONITOR_WINDOW_END_MS = 60000; // Runs for 60 seconds total (covering offset + burst duration)
+const MONITOR_PERIOD_MS = 30000; // 2 minutes total period (including offset and burst duration)
+const MONITOR_WINDOW_START_OFFSET_MS = 0; // Starts 5 seconds before every 15-minute mark
+const MONITOR_WINDOW_END_MS = 28000; // Runs for 60 seconds total (covering offset + burst duration)
 const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
+const DEFAULT_TARGET_INTERVAL_MS = 2000; // Default interval between requests in milliseconds
 
 // Read port from command line arguments (default to 9222)
 const CDP_PORT = process.argv[2] || 9222;
@@ -14,8 +15,9 @@ const WORKER_PREFIX = process.argv[3] || "Instance";
 
 /**
  * Applies a random jitter percentage to a base millisecond value.
- * @param {number} baseMs - The base time in milliseconds.
- * @param {number} jitterPercent - Fraction of jitter (e.g. 0.2 for +/- 20%).
+ *
+ * @param {number} baseMs The base time in milliseconds.
+ * @param {number} jitterPercent Fraction of jitter (e.g. 0.2 for +/- 20%).
  * @returns {number} Jittered milliseconds value.
  */
 function applyJitter(baseMs, jitterPercent = 0.2) {
@@ -38,23 +40,8 @@ function getNewZealandTimestamp(date = new Date()) {
       .formatToParts(date)
       .map(({ type, value }) => [type, value]),
   );
-  const localTimeAsUtc = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-    Number(parts.second),
-  );
-  const offsetMinutes = Math.round((localTimeAsUtc - date.getTime()) / 60000);
-  const offsetSign = offsetMinutes >= 0 ? "+" : "-";
-  const offsetHours = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(
-    2,
-    "0",
-  );
-  const offsetRemainder = String(Math.abs(offsetMinutes) % 60).padStart(2, "0");
 
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${String(date.getMilliseconds()).padStart(3, "0")}${offsetSign}${offsetHours}:${offsetRemainder}`;
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 function getMonitorWindowWaitMs(now = Date.now()) {
@@ -94,7 +81,6 @@ async function waitForMonitorWindow(page, workerId) {
     );
   }
   while (waitMs > 0) {
-    // Apply jitter to the countdown polling interval (e.g. +/- 20%)
     const jitteredCountdownInterval = applyJitter(
       MONITOR_COUNTDOWN_INTERVAL_MS,
       0.2,
@@ -139,7 +125,7 @@ async function monitorProduct({
   skus = [],
   sku,
   quantity = 1,
-  targetIntervalMs = 1000,
+  targetIntervalMs = DEFAULT_TARGET_INTERVAL_MS,
   cartDelayMs = 1000,
   navigationTimeoutMs = 30000,
 }) {
@@ -201,7 +187,6 @@ async function monitorProduct({
           }
 
           const elapsed = performance.now() - iterationStart;
-          // Apply jitter to the refresh interval wait time (+/- 25%)
           const jitteredRefreshInterval = applyJitter(
             targetIntervalMs / 2,
             0.25,
@@ -235,12 +220,20 @@ async function monitorProduct({
             const requestLogs = [];
             let needsReload = false;
 
-            // Helper function for jitter inside browser context
             function applyJitter(baseMs, jitterPercent = 0.2) {
               const range = baseMs * jitterPercent;
               return Math.max(
                 0,
                 Math.round(baseMs + (Math.random() * 2 - 1) * range),
+              );
+            }
+
+            function ts() {
+              const d = new Date();
+              return (
+                d.toTimeString().split(" ")[0] +
+                "." +
+                String(d.getMilliseconds()).padStart(3, "0")
               );
             }
 
@@ -259,53 +252,50 @@ async function monitorProduct({
                   .formatToParts(date)
                   .map(({ type, value }) => [type, value]),
               );
-              const localTimeAsUtc = Date.UTC(
-                Number(parts.year),
-                Number(parts.month) - 1,
-                Number(parts.day),
-                Number(parts.hour),
-                Number(parts.minute),
-                Number(parts.second),
-              );
-              const offsetMinutes = Math.round(
-                (localTimeAsUtc - date.getTime()) / 60000,
-              );
-              const offsetSign = offsetMinutes >= 0 ? "+" : "-";
-              const offsetHours = String(
-                Math.floor(Math.abs(offsetMinutes) / 60),
-              ).padStart(2, "0");
-              const offsetRemainder = String(
-                Math.abs(offsetMinutes) % 60,
-              ).padStart(2, "0");
 
-              return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${String(date.getMilliseconds()).padStart(3, "0")}${offsetSign}${offsetHours}:${offsetRemainder}`;
+              return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
             }
 
-            function classify(text, sku) {
+            function classify(text) {
               const doc = new DOMParser().parseFromString(text, "text/html");
               const modal = doc.querySelector(
                 "#add-to-cart-confirmation .modal-body",
               );
-              const successBox = modal
-                ? modal.querySelector(".alert-success-alt")
-                : null;
+
               const errorP = modal
                 ? modal.querySelector('p[style*="B90618"]')
                 : null;
               const dangerLi = doc.querySelector("#miniCart .alert-danger li");
-              const pushedSku = new RegExp(
-                '"event":\\s*"addToCart"[\\s\\S]*?"id":\\s*"' + sku + '"',
-              ).test(text);
-              const countEl = doc.querySelector("#mini-cart-count");
-              const cartCount = countEl ? countEl.textContent.trim() : "?";
 
-              if (successBox || pushedSku)
-                return { status: "ADDED", cartCount };
-              if (errorP || dangerLi)
+              // Explicitly check for error / sold out indicators FIRST
+              if (errorP || dangerLi) {
                 return {
                   status: "SOLD OUT",
                   msg: (errorP || dangerLi).textContent.trim(),
                 };
+              }
+
+              const successBox = modal
+                ? modal.querySelector(".alert-success-alt")
+                : null;
+
+              const countEl = doc.querySelector("#mini-cart-count");
+              let cartCountNum = 0;
+              let cartCountStr = "?";
+
+              if (countEl) {
+                cartCountStr = countEl.textContent.trim();
+                const parsedVal = parseInt(cartCountStr, 10);
+                if (!isNaN(parsedVal) && parsedVal >= 1) {
+                  cartCountNum = parsedVal;
+                }
+              }
+
+              // If success box is present OR mini-cart-count is greater than 0, treat as ADDED
+              if (cartCountNum > 0) {
+                return { status: "ADDED", cartCount: cartCountStr };
+              }
+
               return { status: "UNKNOWN", msg: text.slice(0, 300) };
             }
 
@@ -317,7 +307,7 @@ async function monitorProduct({
               const iterationStart = performance.now();
 
               const promises = SKUS.map(async (sku) => {
-                const body = `SKU=${sku}&Quantity_${sku}=${QTY}&addToCartBehavior=expresscart`;
+                const BODY = `SKU=${sku}&Quantity_${sku}=${QTY}&addToCartBehavior=expresscart`;
                 const requestTimestamp = getNZTimestamp();
                 const startTimePerf = performance.now();
 
@@ -332,7 +322,7 @@ async function monitorProduct({
                         "application/x-www-form-urlencoded; charset=UTF-8",
                       "x-requested-with": "XMLHttpRequest",
                     },
-                    body: body,
+                    body: BODY,
                   });
 
                   const durationMs = Math.round(
@@ -350,17 +340,17 @@ async function monitorProduct({
                   }
 
                   const text = await res.text();
-                  const classification = classify(text, sku);
+                  const result = classify(text);
 
                   requestLogs.push({
                     timestamp: requestTimestamp,
                     sku,
                     httpStatus: res.status,
-                    resultStatus: classification.status,
+                    resultStatus: result.status,
                     durationMs,
                   });
 
-                  return { sku, result: classification };
+                  return { sku, result };
                 } catch (err) {
                   const durationMs = Math.round(
                     performance.now() - startTimePerf,
@@ -389,18 +379,35 @@ async function monitorProduct({
                 }
 
                 if (result.status === "ADDED") {
+                  console.log(
+                    "%c[" +
+                      ts() +
+                      "] #" +
+                      tries +
+                      " [ADDED TO CART] cart: " +
+                      result.cartCount,
+                    "color:#00b5b5;font-weight:bold",
+                  );
                   successfulAdditions.push({
                     sku,
                     cartCount: result.cartCount,
                   });
                   if (skuIndex > -1) SKUS.splice(skuIndex, 1);
+                } else if (result.status === "SOLD OUT") {
+                  console.log(
+                    "[" + ts() + "] #" + tries + " [SOLD OUT] " + result.msg,
+                  );
+                } else {
+                  console.warn(
+                    "[" + ts() + "] #" + tries + " [UNKNOWN] ",
+                    result.msg,
+                  );
                 }
               }
 
               if (needsReload || SKUS.length === 0) break;
 
               const elapsed = performance.now() - iterationStart;
-              // Apply jitter to the target interval wait time (+/- 20%)
               const jitteredInterval = applyJitter(targetIntervalMs, 0.2);
               const remainingWait = Math.max(0, jitteredInterval - elapsed);
 
@@ -441,6 +448,7 @@ async function monitorProduct({
         }
 
         if (burstResult.successfulAdditions.length > 0) {
+          // Terminal audible beep
           process.stdout.write("\x07");
           console.log(
             `\n🚨 ALARM! [${WORKER_PREFIX}] SUCCESSFUL ITEM(S) SECURED! 🚨\x07`,
@@ -450,7 +458,6 @@ async function monitorProduct({
             logSuccessToFile(workerId, name, url, item.sku);
           }
           if (cartDelayMs > 0) {
-            // Apply jitter to the cart delay timeout (+/- 20%)
             const jitteredCartDelay = applyJitter(cartDelayMs, 0.2);
             await page.waitForTimeout(jitteredCartDelay);
           }
