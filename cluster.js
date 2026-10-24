@@ -1,11 +1,12 @@
 // cluster.js
 const { spawn } = require("child_process");
 const path = require("path");
+const { randomUUID } = require("crypto");
 
 // Define your separate browser instances
 const instances = [
-  // { name: "Browser-Account-1", port: 9222, profileDir: "./chrome-profile-1" },
-  { name: "Browser-Account-2", port: 9223, profileDir: "./chrome-profile-2" },
+  { name: "Browser-Account-1", port: 9222, profileDir: "./chrome-profile-1" },
+  // { name: "Browser-Account-2", port: 9223, profileDir: "./chrome-profile-2" },
   // { name: "Browser-Account-3", port: 9224, profileDir: "./chrome-profile-3" },
   // { name: "Browser-Account-4", port: 9225, profileDir: "./chrome-profile-4" },
   // { name: "Browser-Account-5", port: 9226, profileDir: "./chrome-profile-5" },
@@ -32,21 +33,16 @@ function getChromePath() {
 const chromeExe = getChromePath();
 const MONITOR_RESTART_DELAY_MS = 5000;
 const CHROME_STARTUP_DELAY_MS = 10000;
-const MONITOR_BROWSER_RESTART_EXIT_CODE = 75;
-let nextRestartProfileNumber =
-  Math.max(
-    ...instances.map((inst) => {
-      const match = inst.name.match(/Browser-Account-(\d+)/);
-      return match ? Number(match[1]) : 0;
-    }),
-  ) + 1;
+const MONITOR_SUCCESS_ROTATION_EXIT_CODE = 75;
+const MONITOR_ERROR_ROTATION_EXIT_CODE = 76;
+let nextRestartPort = Math.max(...instances.map((inst) => inst.port)) + 1;
 
-function getNextBrowserInstance() {
-  const accountNumber = nextRestartProfileNumber++;
+function getUniqueBrowserInstance() {
+  const profileId = randomUUID();
   return {
-    name: `Browser-Account-${accountNumber}`,
-    port: 9221 + accountNumber,
-    profileDir: `./chrome-profile-${accountNumber}`,
+    name: `Browser-Profile-${profileId}`,
+    port: nextRestartPort++,
+    profileDir: `./chrome-profile-${profileId}`,
   };
 }
 
@@ -81,25 +77,18 @@ function startMonitor(inst) {
   const scheduleMonitorRestart = () => {
     if (restartScheduled) return;
     restartScheduled = true;
-    setTimeout(
-      () => startMonitor(inst),
-      MONITOR_RESTART_DELAY_MS,
-    );
+    setTimeout(() => startMonitor(inst), MONITOR_RESTART_DELAY_MS);
   };
 
-  const scheduleBrowserRestart = () => {
+  const scheduleBrowserRestart = (nextInst) => {
     if (restartScheduled) return;
     restartScheduled = true;
-    const nextInst = getNextBrowserInstance();
     console.log(
-      `[Cluster] Restarting ${inst.name} with a new profile: ${nextInst.name} (${nextInst.profileDir}) on port ${nextInst.port}.`,
+      `[Cluster] Starting a new profile after ${inst.name} requested browser rotation: ${nextInst.name} (${nextInst.profileDir}) on port ${nextInst.port}.`,
     );
     setTimeout(() => {
       launchChrome(nextInst);
-      setTimeout(
-        () => startMonitor(nextInst),
-        CHROME_STARTUP_DELAY_MS,
-      );
+      setTimeout(() => startMonitor(nextInst), CHROME_STARTUP_DELAY_MS);
     }, MONITOR_RESTART_DELAY_MS);
   };
 
@@ -115,10 +104,13 @@ function startMonitor(inst) {
     console.log(
       `[Cluster] Monitor for ${inst.name} exited with code ${code}${signal ? ` (signal: ${signal})` : ""}`,
     );
-    if (code === MONITOR_BROWSER_RESTART_EXIT_CODE) {
-      scheduleBrowserRestart();
-    } else {
-      scheduleMonitorRestart();
+    switch (code) {
+      case MONITOR_SUCCESS_ROTATION_EXIT_CODE:
+      case MONITOR_ERROR_ROTATION_EXIT_CODE:
+        scheduleBrowserRestart(getUniqueBrowserInstance());
+        break;
+      default:
+        scheduleMonitorRestart();
     }
   });
 }

@@ -11,7 +11,8 @@ const MONITOR_WINDOW_END_MS = 28000; // Runs for 60 seconds total (covering offs
 const MONITOR_COUNTDOWN_INTERVAL_MS = 30000;
 const DEFAULT_TARGET_INTERVAL_MS = 3000; // Default interval between requests in milliseconds
 const BROWSER_RESTART_ERROR_THRESHOLD = 5;
-const BROWSER_RESTART_EXIT_CODE = 75;
+const SUCCESS_ROTATION_EXIT_CODE = 75;
+const ERROR_ROTATION_EXIT_CODE = 76;
 
 // ===== DISCORD CONFIGURATION =====
 const DISCORD_SUCCESS_WEBHOOK_URL =
@@ -591,7 +592,7 @@ async function monitorProduct({
             `[${WORKER_PREFIX} | Worker #${workerId}] Restarting browser after ${BROWSER_RESTART_ERROR_THRESHOLD} consecutive request errors.`,
           );
           process.stdout.write("", () =>
-            process.exit(BROWSER_RESTART_EXIT_CODE),
+            process.exit(ERROR_ROTATION_EXIT_CODE),
           );
           return;
         }
@@ -636,7 +637,13 @@ async function monitorProduct({
             const jitteredCartDelay = applyJitter(cartDelayMs, 0.2);
             await page.waitForTimeout(jitteredCartDelay);
           }
-          await new Promise(() => {});
+          console.log(
+            `[${WORKER_PREFIX} | Worker #${workerId}] Starting a new browser profile after successful cart addition.`,
+          );
+          process.stdout.write("", () =>
+            process.exit(SUCCESS_ROTATION_EXIT_CODE),
+          );
+          return;
         } else {
           console.log(
             `[${WORKER_PREFIX} | Worker #${workerId}] Burst window ended. Tries: ${burstResult.tries}`,
